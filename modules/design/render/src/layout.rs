@@ -14,20 +14,23 @@
 use design_model::{NodeType, ResolvedNode, Theme};
 use serde_json::Value;
 use skia_safe::textlayout::{Paragraph, ParagraphBuilder, ParagraphStyle, TextAlign, TextStyle};
-use skia_safe::{Color, FontStyle, Point, Rect};
+use skia_safe::{Color, FontStyle, Matrix, Point, Rect};
 use taffy::prelude::{
     AlignItems, AvailableSpace, FlexDirection, JustifyContent, NodeId, Position, Style, TaffyTree,
     auto, length, percent,
 };
 
 use crate::fonts::Fonts;
-use crate::look::{Fill, Look, Shadow, num};
+use crate::look::{Align, Fill, Look, num};
 
 pub struct LNode {
     pub id: String,
     pub ty: NodeType,
     /// Absolute, in the artboard's own space (its root is at 0,0).
     pub rect: Rect,
+    /// `rect`'s space -> artboard space: this node's rotation about its centre after every ancestor's. Identity
+    /// when nothing on the way is rotated. `rect` stays the unrotated layout box (what `x`/`y`/`w`/`h` describe).
+    pub mat: Matrix,
     pub look: Look,
     pub kids: Vec<u32>,
     pub para: Option<Paragraph>,
@@ -147,10 +150,24 @@ fn paragraph(n: &ResolvedNode, look: &Look, fx: &Fonts, theme: Theme) -> Paragra
     p
 }
 
-fn bleed(s: &[Shadow]) -> f32 {
-    s.iter()
+/// How far a node draws outside its box: outer shadows, outside / centred strokes, layer blur.
+fn bleed(l: &Look) -> f32 {
+    let sh = l
+        .shadows
+        .iter()
+        .filter(|s| !s.inset)
         .map(|s| s.blur * 1.5 + s.spread.max(0.0) + s.x.abs().max(s.y.abs()))
-        .fold(0.0, f32::max)
+        .fold(0.0, f32::max);
+    let st = l
+        .strokes
+        .iter()
+        .map(|s| match s.align {
+            Align::Inside => 0.0,
+            Align::Center => s.width / 2.0,
+            Align::Outside => s.width,
+        })
+        .fold(0.0, f32::max);
+    sh.max(st) + l.blur * 1.5
 }
 
 impl<'a> B<'a> {
@@ -272,6 +289,7 @@ impl<'a> B<'a> {
             id: n.id.clone(),
             ty: n.ty,
             rect: Rect::default(),
+            mat: Matrix::new_identity(),
             look,
             kids: vec![],
             para: None,
@@ -353,6 +371,7 @@ pub fn build(root: &ResolvedNode, fx: &Fonts, theme: Theme) -> Laid {
     }
     let mut paras: Vec<Option<Paragraph>> = b.paras.drain(..).map(Some).collect();
     let mut bounds = Rect::default();
+    let mut mats = vec![Matrix::new_identity(); b.nodes.len()];
     for i in 0..b.nodes.len() {
         let l = b.t.layout(b.tids[i]).copied().unwrap_or_default();
         let base = if b.parent[i] == usize::MAX {
@@ -371,9 +390,22 @@ pub fn build(root: &ResolvedNode, fx: &Fonts, theme: Theme) -> Laid {
             }
             n.para = p;
         }
-        let e = bleed(&n.look.shadows);
+        let pm = if b.parent[i] == usize::MAX {
+            Matrix::new_identity()
+        } else {
+            mats[b.parent[i]]
+        };
+        mats[i] = if n.look.rotation != 0.0 {
+            let c = Point::new(n.rect.center_x(), n.rect.center_y());
+            Matrix::concat(&pm, &Matrix::rotate_deg_pivot(n.look.rotation, c))
+        } else {
+            pm
+        };
+        n.mat = mats[i];
+        let e = bleed(&n.look);
         let mut r = n.rect;
         r.outset((e, e));
+        let r = n.mat.map_rect(r).0;
         bounds = if i == 0 {
             r
         } else {
@@ -388,7 +420,7 @@ pub fn build(root: &ResolvedNode, fx: &Fonts, theme: Theme) -> Laid {
     let glass = b
         .nodes
         .iter()
-        .filter(|n| n.look.material == crate::look::Material::Glass)
+        .filter(|n| n.look.material == crate::look::Material::Glass || n.look.backdrop_blur > 0.0)
         .count();
     Laid {
         nodes: b.nodes,

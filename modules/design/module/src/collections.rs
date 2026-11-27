@@ -6,7 +6,8 @@ use ainkrad_core_server::api::App;
 use ainkrad_core_server::api::v1::{ApiError, ApiResult, Caller};
 use ainkrad_core_server::store::begin_write;
 use axum::Json;
-use axum::extract::{Extension, Path, State};
+use axum::extract::rejection::QueryRejection;
+use axum::extract::{Extension, Path, Query, State};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::{Row, SqliteConnection};
@@ -143,13 +144,34 @@ async fn check_kit(
     Ok(())
 }
 
+#[derive(Deserialize)]
+pub(crate) struct ListQuery {
+    limit: Option<i64>,
+    offset: Option<i64>,
+    sort: Option<String>,
+}
+
 #[utoipa::path(get, path = "/collections", operation_id = "designListCollections", tag = "design",
-    responses((status = 200, description = "Collections by name", body = Vec<CollectionView>)))]
-pub(crate) async fn list(State(app): State<App>) -> ApiResult<Vec<CollectionView>> {
+    params(("limit" = Option<i64>, Query, description = "At most this many, 1 to 500 (default 500)"),
+           ("offset" = Option<i64>, Query, description = "Skip this many first (default 0): the next page is `offset + limit`"),
+           ("sort" = Option<String>, Query, description = "`name` (default) or `updated` (newest change first)")),
+    responses((status = 200, description = "Collections by name, or by last change with `sort=updated` (a page of at \
+        most `limit`; fewer than `limit` means the last page)", body = Vec<CollectionView>)))]
+pub(crate) async fn list(
+    State(app): State<App>,
+    q: Result<Query<ListQuery>, QueryRejection>,
+) -> ApiResult<Vec<CollectionView>> {
+    let Query(q) = q.map_err(|_| ApiError::bad_request("the query is not valid"))?;
+    let (limit, offset) = crate::docs::page(q.limit, q.offset)?;
+    let updated = crate::docs::by_updated(q.sort.as_deref())?;
     let mut conn = app.pool.acquire().await?;
     let ids: Vec<String> = sqlx::query_scalar(
-        "SELECT id FROM design_collections ORDER BY name COLLATE NOCASE, id LIMIT 500",
+        "SELECT id FROM design_collections \
+         ORDER BY CASE WHEN ?1 THEN updated_at END DESC, name COLLATE NOCASE, id LIMIT ?2 OFFSET ?3",
     )
+    .bind(updated)
+    .bind(limit)
+    .bind(offset)
     .fetch_all(&mut *conn)
     .await?;
     let mut out = Vec::with_capacity(ids.len());

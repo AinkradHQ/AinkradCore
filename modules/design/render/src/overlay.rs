@@ -41,6 +41,10 @@ pub struct Overlay {
     pub selected: Vec<Rect>,
     /// Bounds of the selection; drawn with its eight resize handles.
     pub bounds: Option<Rect>,
+    /// Rotations in degrees about each rect's centre (missing = upright): the hover, each selected rect, the bounds.
+    pub hover_rot: f32,
+    pub selected_rot: Vec<f32>,
+    pub bounds_rot: f32,
     pub marquee: Option<Rect>,
     /// Guide segments `[x1, y1, x2, y2]`.
     pub guides: Vec<[f32; 4]>,
@@ -88,10 +92,17 @@ pub fn draw(canvas: &Canvas, cam: &Camera, o: &Overlay) {
     line.set_stroke_width(1.0);
     line.set_color(ACCENT);
     if let Some(h) = o.hover {
-        canvas.draw_rect(screen(cam, h), &line);
+        let r = screen(cam, h);
+        turned(canvas, r, o.hover_rot, || {
+            canvas.draw_rect(r, &line);
+        });
     }
-    for r in &o.selected {
-        canvas.draw_rect(screen(cam, *r), &line);
+    for (i, r) in o.selected.iter().enumerate() {
+        let r = screen(cam, *r);
+        let deg = o.selected_rot.get(i).copied().unwrap_or(0.0);
+        turned(canvas, r, deg, || {
+            canvas.draw_rect(r, &line);
+        });
     }
     if let Some(m) = o.marquee {
         let r = screen(cam, m);
@@ -102,6 +113,10 @@ pub fn draw(canvas: &Canvas, cam: &Camera, o: &Overlay) {
     }
     if let Some(b) = o.bounds {
         let r = screen(cam, b);
+        canvas.save();
+        if o.bounds_rot != 0.0 {
+            canvas.rotate(o.bounds_rot, Some((r.center_x(), r.center_y()).into()));
+        }
         canvas.draw_rect(r, &line);
         let mut fill = Paint::default();
         fill.set_anti_alias(true);
@@ -115,6 +130,7 @@ pub fn draw(canvas: &Canvas, cam: &Camera, o: &Overlay) {
             canvas.draw_rrect(h, &fill);
             canvas.draw_rrect(h, &line);
         }
+        canvas.restore();
     }
     let mut fill = Paint::default();
     fill.set_anti_alias(true);
@@ -140,6 +156,17 @@ pub fn draw(canvas: &Canvas, cam: &Camera, o: &Overlay) {
         let (x2, y2) = cam.to_screen(g[2], g[3]);
         canvas.draw_line((x1, y1), (x2, y2), &line);
     }
+}
+
+/// Run `f` with the canvas turned `deg` about `r`'s centre.
+fn turned(canvas: &Canvas, r: Rect, deg: f32, f: impl FnOnce()) {
+    if deg == 0.0 {
+        return f();
+    }
+    canvas.save();
+    canvas.rotate(deg, Some((r.center_x(), r.center_y()).into()));
+    f();
+    canvas.restore();
 }
 
 /// Outlines drawn per peer; the full selection stays in the peer list.

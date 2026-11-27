@@ -149,6 +149,7 @@ impl Live {
         let mut undo = UndoManager::with_options(UndoOptions::default());
         undo.expand_scope(&doc, &nodes);
         undo.expand_scope(&doc, &meta);
+        undo.expand_scope(&doc, &tokens);
         undo.include_origin(Origin::from(LOCAL));
         Live {
             presence: Presence::new(doc, clock),

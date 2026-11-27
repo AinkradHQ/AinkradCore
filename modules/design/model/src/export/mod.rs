@@ -108,6 +108,15 @@ struct Walk<'a> {
     next: usize,
 }
 
+/// The `stroke` prop as a list: one stroke object, or each object of a list (anything else is skipped).
+pub(crate) fn strokes(v: Option<&Value>) -> Vec<&serde_json::Map<String, Value>> {
+    match v {
+        Some(Value::Array(a)) => a.iter().filter_map(Value::as_object).collect(),
+        Some(Value::Object(m)) => vec![m],
+        _ => vec![],
+    }
+}
+
 fn child_flow(n: &ResolvedNode) -> Flow {
     let layout = (n.ty.is_container() || n.ty == NodeType::Instance)
         .then(|| n.props.get("layout").and_then(Value::as_object))
@@ -165,8 +174,8 @@ impl Walk<'_> {
                 attrs += &format!(" data-transition=\"{}\"", esc(t));
             }
         }
-        if let Some(r) = p
-            .get("stroke")
+        if let Some(r) = strokes(p.get("stroke"))
+            .first()
             .and_then(|s| s.get("role"))
             .and_then(Value::as_str)
         {

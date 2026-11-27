@@ -190,19 +190,45 @@ async fn check_system(
     Ok(())
 }
 
+/// A list's page: `limit` 1 to 500 (default 500) rows after skipping `offset` (default 0); refused out of range.
+pub(crate) fn page(limit: Option<i64>, offset: Option<i64>) -> Result<(i64, i64), ApiError> {
+    let limit = limit.unwrap_or(LIST_MAX);
+    let offset = offset.unwrap_or(0);
+    if !(1..=LIST_MAX).contains(&limit) || !(0..=1_000_000).contains(&offset) {
+        return Err(ApiError::bad_request("the query is not valid"));
+    }
+    Ok((limit, offset))
+}
+
+/// `name` (default) or `updated` (newest change first); whether it is `updated`.
+pub(crate) fn by_updated(sort: Option<&str>) -> Result<bool, ApiError> {
+    match sort {
+        None | Some("name") => Ok(false),
+        Some("updated") => Ok(true),
+        Some(_) => Err(ApiError::bad_request("the query is not valid")),
+    }
+}
+
 #[derive(Deserialize)]
 pub(crate) struct ListQuery {
     /// `active` (default), `archived` or `all`.
     state: Option<String>,
     kind: Option<String>,
     project: Option<String>,
+    limit: Option<i64>,
+    offset: Option<i64>,
+    sort: Option<String>,
 }
 
 #[utoipa::path(get, path = "/docs", operation_id = "designListDocs", tag = "design",
     params(("state" = Option<String>, Query, description = "`active` (default), `archived` or `all`"),
            ("kind" = Option<String>, Query, description = "Only this kind"),
-           ("project" = Option<String>, Query, description = "Only docs linked to this project id")),
-    responses((status = 200, description = "Designs by name (at most 500)", body = Vec<DocView>)))]
+           ("project" = Option<String>, Query, description = "Only docs linked to this project id"),
+           ("limit" = Option<i64>, Query, description = "At most this many, 1 to 500 (default 500)"),
+           ("offset" = Option<i64>, Query, description = "Skip this many first (default 0): the next page is `offset + limit`"),
+           ("sort" = Option<String>, Query, description = "`name` (default) or `updated` (newest change first)")),
+    responses((status = 200, description = "Designs by name, or by last change with `sort=updated` (a page of at most \
+        `limit`; fewer than `limit` means the last page)", body = Vec<DocView>)))]
 pub(crate) async fn list(
     State(app): State<App>,
     q: Result<Query<ListQuery>, QueryRejection>,
@@ -214,18 +240,22 @@ pub(crate) async fn list(
     {
         return Err(ApiError::bad_request("the query is not valid"));
     }
+    let (limit, offset) = page(q.limit, q.offset)?;
+    let updated = by_updated(q.sort.as_deref())?;
     let mut conn = app.pool.acquire().await?;
     let ids: Vec<String> = sqlx::query_scalar(
         "SELECT id FROM design_docs \
          WHERE (?1 = 'all' OR state = ?1) AND (?2 IS NULL OR kind = ?2) \
            AND (?3 IS NULL OR EXISTS (SELECT 1 FROM design_links l \
                 WHERE l.item_kind = 'doc' AND l.item = design_docs.id AND l.project = ?3)) \
-         ORDER BY name COLLATE NOCASE, id LIMIT ?4",
+         ORDER BY CASE WHEN ?5 THEN updated_at END DESC, name COLLATE NOCASE, id LIMIT ?4 OFFSET ?6",
     )
     .bind(state)
     .bind(q.kind)
     .bind(q.project)
-    .bind(LIST_MAX)
+    .bind(limit)
+    .bind(updated)
+    .bind(offset)
     .fetch_all(&mut *conn)
     .await?;
     let mut out = Vec::with_capacity(ids.len());
@@ -407,6 +437,33 @@ pub(crate) async fn archive(State(app): State<App>, Path(doc): Path<String>) -> 
         .execute(&mut *tx)
         .await?;
         record(&mut tx, "archived", &doc, None).await?;
+    }
+    let out = view(&mut tx, &doc).await?;
+    tx.commit().await?;
+    Ok(Json(out))
+}
+
+#[utoipa::path(post, path = "/docs/{doc}/unarchive", operation_id = "designUnarchiveDoc", tag = "design",
+    params(("doc" = String, Path, description = "Design id")),
+    responses((status = 200, description = "Active again, as it was (audited as `design.doc.unarchived`); unarchiving an \
+        active design changes nothing; 404 for no such design", body = DocView)))]
+pub(crate) async fn unarchive(
+    State(app): State<App>,
+    Path(doc): Path<String>,
+) -> ApiResult<DocView> {
+    if !doc_id_ok(&doc) {
+        return Err(ApiError::not_found("no such design"));
+    }
+    let mut tx = begin_write(&app.pool).await?;
+    let cur = view(&mut tx, &doc).await?;
+    if cur.state == "archived" {
+        sqlx::query(
+            "UPDATE design_docs SET state = 'active', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?",
+        )
+        .bind(&doc)
+        .execute(&mut *tx)
+        .await?;
+        record(&mut tx, "unarchived", &doc, None).await?;
     }
     let out = view(&mut tx, &doc).await?;
     tx.commit().await?;

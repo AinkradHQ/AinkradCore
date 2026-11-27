@@ -390,7 +390,17 @@
 ///    (the harness the Core runs the provider on: a built-in's own, `opencode` for a preset or user definition),
 ///    and for a preset `key_url`, `key_hint` and `default_model`. Presets add `together`, `fireworks` and `vercel`.
 ///    An AI-order entry on a preset that names no model runs its `default_model`.
-pub const API_MINOR: u32 = 107;
+/// 108: design systems (2026-11-26). The design compose takes `mode: "system"` (a `system` doc only) with an optional
+///    `brand` {colors, name}: it writes a design system's tokens and ends `done` with one direction and no frame; an
+///    older Core ignores both fields and draws frames. The design edit batch takes the `token` op
+///    (`{"op":"token","name","value":{kind,day,night}|null}`).
+/// 109: design AI quality and library paging (2026-11-26). The design compose keeps the first `count` directions (fewer
+///    are accepted), takes `mode: "edit"` with `frame` (a node id; 400 when the doc lacks it) and `brand` for screens,
+///    may answer a single direction as a linked flow of up to six screens; its view adds optional `stage`
+///    (`thinking`, `drawing`, `placing`), `flow` and per direction `screens`, and fails a drawing stuck past six
+///    minutes. `POST /docs/{doc}/unarchive`; `GET /docs` and `/collections` take `limit`, `offset` and `sort`
+///    (`name`, `updated`), `GET /assets` `limit` and `offset`. An older Core ignores the new fields and queries.
+pub const API_MINOR: u32 = 109;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

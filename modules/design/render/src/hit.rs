@@ -32,13 +32,19 @@ pub(crate) fn hit_node(
     if !n.look.visible || skip(&n.id) {
         return None;
     }
+    // a rotated node is hit in its own unrotated box: the point goes back through the rotation
+    let at = if n.mat.is_identity() {
+        Point::new(x, y)
+    } else {
+        n.mat.invert()?.map_point((x, y))
+    };
     // a line has no area: a few points of slack keep a flat vector clickable
     let inside = if n.ty == NodeType::Vector {
         n.rect.with_outset((VECTOR_PAD, VECTOR_PAD))
     } else {
         n.rect
     }
-    .contains(Point::new(x, y));
+    .contains(at);
     if n.look.clip && !inside {
         return None;
     }
@@ -59,8 +65,13 @@ impl Renderer {
     /// The deepest, topmost visible node under a screen point (points). Hidden nodes and anything outside a clipping
     /// frame are not hit.
     pub fn hit(&self, sx: f32, sy: f32) -> Option<Hit> {
+        self.hit_skip(sx, sy, &|_| false)
+    }
+
+    /// As `hit`, looking through the nodes `skip` names (locked ones, for the canvas).
+    pub fn hit_skip(&self, sx: f32, sy: f32, skip: &dyn Fn(&str) -> bool) -> Option<Hit> {
         let (x, y) = self.camera.to_world(sx, sy);
-        self.hit_world(x, y)
+        self.hit_world_skip(x, y, skip)
     }
 
     pub fn hit_world(&self, x: f32, y: f32) -> Option<Hit> {

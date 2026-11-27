@@ -20,7 +20,7 @@ use design_render::camera::{band, unband};
 use crate::ffi::*;
 use crate::host::{Host, MAX_COORD, finite};
 use crate::preview;
-use crate::snap::handle_at;
+use crate::snap::{handle_at_turned, rotate_at};
 
 /// Screen points a press travels before it is a drag.
 pub(crate) const DRAG_PT: f32 = 3.0;
@@ -37,6 +37,16 @@ pub(crate) enum Press {
     Board(String),
     Empty,
     Handle(u8),
+    /// the rotate zone outside a corner of the selection bounds
+    Rotate,
+}
+
+/// A rotate drag: about `center` (world), from the pointer's angle `from` (degrees) at the press.
+pub(crate) struct Turn {
+    pub center: (f32, f32),
+    pub from: f32,
+    /// each node's rotation and drawn centre when the drag started
+    pub base: Vec<(f32, (f32, f32))>,
 }
 
 pub(crate) struct Edit {
@@ -46,6 +56,10 @@ pub(crate) struct Edit {
     pub ids: Vec<String>,
     /// their world rects when the drag started (of the originals)
     pub rects: Vec<Rect>,
+    /// their drawn frames (box centred where it shows, rotation) when the drag started
+    pub frames: Vec<(Rect, f32)>,
+    /// `Some` for a rotate drag
+    pub turn: Option<Turn>,
     /// world pointer when the drag started
     pub start: (f32, f32),
     /// alt-drag: per copy, its `add` ops (root first)
@@ -82,7 +96,9 @@ pub(crate) fn union(rs: impl IntoIterator<Item = Rect>) -> Option<Rect> {
     })
 }
 
-fn cursor_of(h: u8) -> i32 {
+/// The resize cursor of handle `h` on bounds drawn turned `rot` degrees (each 45° moves it one handle on).
+fn cursor_of(h: u8, rot: f32) -> i32 {
+    let h = (h as i32 + (rot / 45.0).round() as i32).rem_euclid(8);
     match h {
         0 | 4 => DE_CURSOR_RESIZE_NWSE,
         2 | 6 => DE_CURSOR_RESIZE_NESW,
@@ -94,13 +110,36 @@ fn cursor_of(h: u8) -> i32 {
 impl Host {
     // ---- lookups (valid after `refresh`) -----------------------------------------------------------------------
 
+    /// A node's layout box (unrotated: what its `x`/`y`/`w`/`h` say), world.
     pub(crate) fn rect(&self, id: &str) -> Option<Rect> {
         self.renderer.as_ref()?.node_rect(id)
     }
 
-    /// The deepest document node under screen point (x, y).
+    /// A node as drawn: its box centred where it shows, and its rotation in degrees.
+    pub(crate) fn frame(&self, id: &str) -> Option<(Rect, f32)> {
+        self.renderer.as_ref()?.node_frame(id)
+    }
+
+    /// The axis-aligned box a node covers as drawn (rotation included).
+    pub(crate) fn drawn(&self, id: &str) -> Option<Rect> {
+        self.renderer.as_ref()?.node_bounds(id)
+    }
+
+    /// `locked: true`: the canvas looks through the node (and what is in it); the layers panel still selects it.
+    pub(crate) fn locked(&self, id: &str) -> bool {
+        self.model
+            .as_ref()
+            .and_then(|m| m.nodes.get(id))
+            .and_then(|n| n.props.get("locked")?.as_bool())
+            == Some(true)
+    }
+
+    /// The deepest document node under screen point (x, y), locked nodes looked through.
     pub(crate) fn hit_doc(&self, x: f32, y: f32) -> Option<String> {
-        let h = self.renderer.as_ref()?.hit(x, y)?;
+        let h = self
+            .renderer
+            .as_ref()?
+            .hit_skip(x, y, &|id| self.locked(id))?;
         let m = self.model.as_ref()?;
         h.path.into_iter().rev().find(|id| m.nodes.contains_key(id))
     }
@@ -143,12 +182,26 @@ impl Host {
         false
     }
 
-    fn sel_bounds_screen(&self) -> Option<Rect> {
-        let b = union(self.selection.iter().filter_map(|id| self.rect(id)))?;
+    /// The selection bounds with handles, world, and their rotation: one rotated node's own turned box, else the
+    /// box around what is drawn. Locked nodes have no handles.
+    pub(crate) fn sel_frame(&self) -> Option<(Rect, f32)> {
+        let ids: Vec<&String> = self
+            .selection
+            .iter()
+            .filter(|id| !self.locked(id))
+            .collect();
+        if let [one] = ids[..] {
+            return self.frame(one);
+        }
+        Some((union(ids.iter().filter_map(|id| self.drawn(id)))?, 0.0))
+    }
+
+    fn sel_bounds_screen(&self) -> Option<(Rect, f32)> {
+        let (b, rot) = self.sel_frame()?;
         let c = self.camera;
         let (l, t) = c.to_screen(b.left, b.top);
         let (r, bt) = c.to_screen(b.right, b.bottom);
-        Some(Rect::new(l, t, r, bt))
+        Some((Rect::new(l, t, r, bt), rot))
     }
 
     // ---- pointer ------------------------------------------------------------------------------------------------
@@ -187,13 +240,19 @@ impl Host {
     fn down(&mut self, x: f32, y: f32, mods: u32) {
         self.cancel();
         let shift = mods & DE_MOD_SHIFT != 0;
-        if let Some(h) = self.sel_bounds_screen().and_then(|b| handle_at(b, x, y)) {
-            self.gesture = Some(Gesture::Press {
-                at: (x, y),
-                mods,
-                kind: Press::Handle(h),
-            });
-            return;
+        if let Some((b, rot)) = self.sel_bounds_screen() {
+            let kind = match handle_at_turned(b, rot, x, y) {
+                Some(h) => Some(Press::Handle(h)),
+                None => rotate_at(b, rot, x, y).map(|_| Press::Rotate),
+            };
+            if let Some(kind) = kind {
+                self.gesture = Some(Gesture::Press {
+                    at: (x, y),
+                    mods,
+                    kind,
+                });
+                return;
+            }
         }
         let kind = match self.hit_doc(x, y) {
             None => {
@@ -251,6 +310,7 @@ impl Host {
                 self.gesture = match kind {
                     Press::Node { .. } => self.begin_edit(None, m0 & DE_MOD_OPTION != 0, from),
                     Press::Handle(h) => self.begin_edit(Some(h), false, from),
+                    Press::Rotate => self.begin_rotate(from),
                     Press::Board(id) => Some(Gesture::Marquee {
                         scope: Some(id),
                         from,
@@ -287,7 +347,10 @@ impl Host {
                 let scope_id = scope.clone().or_else(|| self.page_id()).unwrap_or_default();
                 let mut sel = base.clone();
                 for k in self.kids(&scope_id) {
-                    if !sel.contains(&k) && self.rect(&k).is_some_and(|r| Rect::intersects(&r, m)) {
+                    if !sel.contains(&k)
+                        && !self.locked(&k)
+                        && self.drawn(&k).is_some_and(|r| Rect::intersects(&r, m))
+                    {
                         sel.push(k);
                     }
                 }
@@ -300,9 +363,10 @@ impl Host {
                 });
             }
             Some(Gesture::Edit(mut e)) => {
-                let (ops, guides) = match e.handle {
-                    None => self.move_ops(&e, p, mods),
-                    Some(h) => self.resize_ops(&e, h, p, mods),
+                let (ops, guides) = match (&e.turn, e.handle) {
+                    (Some(t), _) => (self.rotate_ops(&e, t, p, mods), vec![]),
+                    (None, None) => self.move_ops(&e, p, mods),
+                    (None, Some(h)) => self.resize_ops(&e, h, p, mods),
                 };
                 e.ops = ops;
                 e.guides = guides;
@@ -369,16 +433,29 @@ impl Host {
         if let Some(c) = self.tools.cursor() {
             return Ok(c);
         }
-        if let Some(Gesture::Edit(Edit {
-            handle: Some(h), ..
-        })) = &self.gesture
-        {
-            return Ok(cursor_of(*h));
+        match &self.gesture {
+            Some(Gesture::Edit(Edit { turn: Some(_), .. })) => return Ok(DE_CURSOR_ROTATE),
+            Some(Gesture::Edit(Edit {
+                handle: Some(h),
+                frames,
+                ..
+            })) => {
+                let rot = frames
+                    .first()
+                    .filter(|_| frames.len() == 1)
+                    .map_or(0.0, |f| f.1);
+                return Ok(cursor_of(*h, rot));
+            }
+            _ => {}
         }
-        Ok(self
-            .sel_bounds_screen()
-            .and_then(|b| handle_at(b, x, y))
-            .map_or(DE_CURSOR_DEFAULT, cursor_of))
+        let Some((b, rot)) = self.sel_bounds_screen() else {
+            return Ok(DE_CURSOR_DEFAULT);
+        };
+        Ok(match handle_at_turned(b, rot, x, y) {
+            Some(h) => cursor_of(h, rot),
+            None if rotate_at(b, rot, x, y).is_some() => DE_CURSOR_ROTATE,
+            None => DE_CURSOR_DEFAULT,
+        })
     }
 
     // ---- preview + overlay --------------------------------------------------------------------------------------
@@ -432,8 +509,18 @@ impl Host {
             }
             _ => &self.selection,
         };
-        o.selected = ids.iter().filter_map(|id| self.rect(id)).collect();
-        o.bounds = union(o.selected.iter().copied());
+        let frames: Vec<(Rect, f32)> = ids.iter().filter_map(|id| self.frame(id)).collect();
+        o.selected = frames.iter().map(|f| f.0).collect();
+        o.selected_rot = frames.iter().map(|f| f.1).collect();
+        // during a gesture its nodes' bounds; otherwise the handles' bounds (none for a locked-only selection)
+        let b = match &self.gesture {
+            Some(Gesture::Edit(e)) if e.ids.len() == 1 => self.frame(&e.ids[0]),
+            Some(Gesture::Edit(e)) => {
+                union(e.ids.iter().filter_map(|id| self.drawn(id))).map(|r| (r, 0.0))
+            }
+            _ => self.sel_frame(),
+        };
+        (o.bounds, o.bounds_rot) = (b.map(|b| b.0), b.map_or(0.0, |b| b.1));
         if let Some(Gesture::Marquee { from, to, .. }) = &self.gesture {
             o.marquee = Some(Rect::new(
                 from.0.min(to.0),
@@ -446,7 +533,11 @@ impl Host {
             .hover
             .as_ref()
             .filter(|h| self.gesture.is_none() && !self.selection.contains(h))
-            .and_then(|h| self.rect(h));
+            .and_then(|h| self.frame(h))
+            .map(|(r, rot)| {
+                o.hover_rot = rot;
+                r
+            });
         self.text_overlay(&mut o);
         o
     }

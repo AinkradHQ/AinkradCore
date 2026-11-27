@@ -62,6 +62,8 @@ pub const DE_CURSOR_GRAB: i32 = 6;
 pub const DE_CURSOR_GRABBING: i32 = 7;
 /// Text tool: I-beam.
 pub const DE_CURSOR_TEXT: i32 = 8;
+/// Just outside a corner of the selection bounds: a drag there rotates the selection (⇧ snaps to 15°).
+pub const DE_CURSOR_ROTATE: i32 = 9;
 
 /// `de_set_tool` tools. Drawing tools return to `DE_TOOL_SELECT` after one node (the pen after one path).
 pub const DE_TOOL_SELECT: u32 = 0;
@@ -100,6 +102,8 @@ pub const DE_MAX_ID_BYTES: usize = 128;
 /// Ids one `de_select` takes.
 pub const DE_MAX_SELECT_IDS: usize = 4096;
 pub const DE_MAX_BLOB_BYTES: usize = 25 << 20;
+/// Clipboard JSON `de_copy` writes and `de_paste` takes.
+pub const DE_MAX_CLIP_BYTES: usize = 8 << 20;
 
 // Literals for the header; kept equal to the document crate's caps.
 const _: () = assert!(DE_MAX_SYNC_BYTES == design_doc::MAX_UPDATE_BYTES);

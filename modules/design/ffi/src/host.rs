@@ -43,7 +43,7 @@ pub(crate) fn finite(v: &[f32], lim: f32) -> Result<(), i32> {
 }
 
 pub struct Host {
-    doc_id: String,
+    pub(crate) doc_id: String,
     pub(crate) live: Live,
     pub(crate) system: Live,
     /// The document as last read out of `live` (None = changed since), and its tree.
@@ -52,7 +52,7 @@ pub struct Host {
     /// The resolved document the renderer last loaded (gesture previews patch its boards).
     pub(crate) resolved: Option<Resolved>,
     pub(crate) camera: Camera,
-    theme: Theme,
+    pub(crate) theme: Theme,
     pub(crate) page: usize,
     pub(crate) selection: Vec<String>,
     pub(crate) renderer: Option<Renderer>,
@@ -387,9 +387,10 @@ impl Host {
 
     fn hit(&mut self, x: f32, y: f32) -> Option<(String, Value)> {
         self.refresh();
-        let r = self.renderer.as_mut()?;
-        r.set_camera(self.camera);
-        let h = r.hit(x, y)?;
+        let cam = self.camera;
+        self.renderer.as_mut()?.set_camera(cam);
+        let r = self.renderer.as_ref()?;
+        let h = r.hit_skip(x, y, &|id| self.locked(id))?;
         Some((
             h.id.clone(),
             json!({"id": h.id, "artboard": h.artboard, "path": h.path}),

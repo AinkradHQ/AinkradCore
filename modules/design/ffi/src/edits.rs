@@ -16,8 +16,13 @@ use serde_json::{Value, json};
 
 use crate::ffi::*;
 use crate::host::Host;
-use crate::interact::{Edit, Gesture, union};
-use crate::snap::{SNAP_PT, edges, insert_index, map_rect, resize, round2, snap_edges, snap_move};
+use crate::interact::{Edit, Gesture, Turn, union};
+use crate::snap::{
+    SNAP_PT, edges, insert_index, map_rect, norm_deg, resize, round2, snap_edges, snap_move, turn,
+};
+
+/// ⇧ while rotating snaps to this many degrees.
+const ROTATE_SNAP: f32 = 15.0;
 
 /// Gap between a duplicated top-level node and its original.
 const DUP_GAP: f32 = 40.0;
@@ -109,8 +114,17 @@ impl Host {
         dup: bool,
         start: (f32, f32),
     ) -> Option<Gesture> {
-        let srcs = self.top_selected();
+        // a locked node stays where it is (selected from the layers panel, it is never carried)
+        let srcs: Vec<String> = self
+            .top_selected()
+            .into_iter()
+            .filter(|id| !self.locked(id))
+            .collect();
         let rects: Vec<Rect> = srcs.iter().map(|id| self.rect(id)).collect::<Option<_>>()?;
+        let frames: Vec<(Rect, f32)> = srcs
+            .iter()
+            .map(|id| self.frame(id))
+            .collect::<Option<_>>()?;
         if srcs.is_empty() {
             return None;
         }
@@ -128,12 +142,110 @@ impl Host {
             handle,
             ids,
             rects,
+            frames,
+            turn: None,
             start,
             copies,
             dups,
             ops: vec![],
             guides: vec![],
         }))
+    }
+
+    /// A rotate drag from world point `from`: about the centre of the selection's drawn bounds.
+    pub(crate) fn begin_rotate(&mut self, from: (f32, f32)) -> Option<Gesture> {
+        let Some(Gesture::Edit(mut e)) = self.begin_edit(None, false, from) else {
+            return None;
+        };
+        let c = match &e.frames[..] {
+            [(r, _)] => (r.center_x(), r.center_y()),
+            _ => {
+                let b = union(e.ids.iter().filter_map(|id| self.drawn(id)))?;
+                (b.center_x(), b.center_y())
+            }
+        };
+        e.turn = Some(Turn {
+            center: c,
+            from: (from.1 - c.1).atan2(from.0 - c.0).to_degrees(),
+            base: e
+                .frames
+                .iter()
+                .map(|(r, rot)| (*rot, (r.center_x(), r.center_y())))
+                .collect(),
+        });
+        Some(Gesture::Edit(e))
+    }
+
+    /// `rotation` for each node turned by the pointer's angle about the centre (⇧: one node snaps to 15°, a group
+    /// turns in 15° steps); in a group each node also moves around the group's centre.
+    pub(crate) fn rotate_ops(&self, e: &Edit, t: &Turn, p: (f32, f32), mods: u32) -> Vec<Op> {
+        let snap = mods & DE_MOD_SHIFT != 0;
+        let step = |d: f32| (d / ROTATE_SNAP).round() * ROTATE_SNAP;
+        let mut d = (p.1 - t.center.1).atan2(p.0 - t.center.0).to_degrees() - t.from;
+        if snap && e.ids.len() > 1 {
+            d = step(d);
+        }
+        let mut ops = vec![];
+        for (i, id) in e.ids.iter().enumerate() {
+            let (rot0, c0) = t.base[i];
+            let mut r = rot0 + d;
+            if snap && e.ids.len() == 1 {
+                r = step(r);
+            }
+            // the node's own rotation: its drawn rotation minus what its ancestors add
+            let own = self.own_rotation(id) + norm_deg(r - rot0);
+            let own = round2(norm_deg(own));
+            ops.push(set(
+                id,
+                "rotation",
+                if own == 0.0 { Value::Null } else { json!(own) },
+            ));
+            let par = self.parent_of(id).unwrap_or_default();
+            if e.ids.len() > 1 && !self.is_flow(&par) {
+                let c1 = turn(c0, t.center, d);
+                let (r0, o) = (e.rects[i], self.origin(&par));
+                ops.push(set(id, "x", json!(round2(r0.left - o.0 + c1.0 - c0.0))));
+                ops.push(set(id, "y", json!(round2(r0.top - o.1 + c1.1 - c0.1))));
+            }
+        }
+        ops
+    }
+
+    fn own_rotation(&self, id: &str) -> f32 {
+        self.model
+            .as_ref()
+            .and_then(|m| m.nodes.get(id))
+            .and_then(|n| n.props.get("rotation")?.as_f64())
+            .unwrap_or(0.0) as f32
+    }
+
+    /// One rotated node resized from a handle: the drag is read in the node's own axes and the opposite side stays
+    /// where it shows. ponytail: a node inside a rotated parent moves in the parent's unrotated axes.
+    fn resize_turned(&self, e: &Edit, h: u8, p: (f32, f32), mods: u32) -> Vec<Op> {
+        let ((f0, rot), r0, id) = (e.frames[0], e.rects[0], &e.ids[0]);
+        let c0 = (f0.center_x(), f0.center_y());
+        let dw = (p.0 - e.start.0, p.1 - e.start.1);
+        let dl = turn(dw, (0.0, 0.0), -rot);
+        let n = resize(
+            f0,
+            h,
+            (dl.0.round(), dl.1.round()),
+            mods & DE_MOD_SHIFT != 0,
+        );
+        let c1 = turn((n.center_x(), n.center_y()), c0, rot);
+        let mut ops = vec![
+            set(id, "w", json!(round2(n.width()))),
+            set(id, "h", json!(round2(n.height()))),
+        ];
+        let par = self.parent_of(id).unwrap_or_default();
+        if !self.is_flow(&par) {
+            let o = self.origin(&par);
+            let x = r0.left - o.0 + (c1.0 - c0.0) - (n.width() - r0.width()) / 2.0;
+            let y = r0.top - o.1 + (c1.1 - c0.1) - (n.height() - r0.height()) / 2.0;
+            ops.push(set(id, "x", json!(round2(x))));
+            ops.push(set(id, "y", json!(round2(y))));
+        }
+        ops
     }
 
     /// The container a drop at world `p` lands in: the deepest frame or component under it, looking through the
@@ -281,6 +393,13 @@ impl Host {
         p: (f32, f32),
         mods: u32,
     ) -> (Vec<Op>, Guides) {
+        if let [(_, rot)] = e.frames[..]
+            && rot != 0.0
+        {
+            let mut ops = self.resize_turned(e, h, p, mods);
+            ops.extend(self.fix_sizing(&e.ids[0], h));
+            return (ops, vec![]);
+        }
         let Some(b0) = union(e.rects.iter().copied()) else {
             return (vec![], vec![]);
         };
@@ -297,26 +416,12 @@ impl Host {
                 SNAP_PT / self.camera.zoom,
             );
         }
-        let (l, t, r, bt) = edges(h);
         let mut ops = vec![];
         for (id, r0) in e.ids.iter().zip(&e.rects) {
             let n = map_rect(*r0, b0, b);
             ops.push(set(id, "w", json!(round2(n.width()))));
             ops.push(set(id, "h", json!(round2(n.height()))));
-            let sizing = self
-                .model
-                .as_ref()
-                .and_then(|m| m.nodes.get(id))
-                .and_then(|n| n.props.get("sizing")?.as_object().cloned());
-            if let Some(mut s) = sizing {
-                if l || r {
-                    s.insert("w".into(), json!("fixed"));
-                }
-                if t || bt {
-                    s.insert("h".into(), json!("fixed"));
-                }
-                ops.push(set(id, "sizing", Value::Object(s)));
-            }
+            ops.extend(self.fix_sizing(id, h));
             let par = self.parent_of(id).unwrap_or_default();
             if !self.is_flow(&par) {
                 let o = self.origin(&par);
@@ -325,6 +430,23 @@ impl Host {
             }
         }
         (ops, guides)
+    }
+
+    /// A resized axis becomes `fixed` in a node that has `sizing`.
+    fn fix_sizing(&self, id: &str, h: u8) -> Option<Op> {
+        let (l, t, r, bt) = edges(h);
+        let mut s = self
+            .model
+            .as_ref()
+            .and_then(|m| m.nodes.get(id))
+            .and_then(|n| n.props.get("sizing")?.as_object().cloned())?;
+        if l || r {
+            s.insert("w".into(), json!("fixed"));
+        }
+        if t || bt {
+            s.insert("h".into(), json!("fixed"));
+        }
+        Some(set(id, "sizing", Value::Object(s)))
     }
 
     /// ⌘D: copy each selected subtree right after its original (a top-level copy sits to the right of it) and
@@ -368,7 +490,7 @@ impl Host {
         self.refresh();
         let mut ops = vec![];
         for id in self.top_selected() {
-            let Some(par) = self.parent_of(&id) else {
+            let Some(par) = self.parent_of(&id).filter(|_| !self.locked(&id)) else {
                 continue;
             };
             if self.is_flow(&par) {

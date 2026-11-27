@@ -12,6 +12,11 @@ mod assets;
 mod checks;
 mod collections;
 mod compose;
+mod compose_answer;
+mod compose_build;
+mod compose_prompt;
+mod compose_session;
+mod compose_system;
 mod docs;
 mod fidelity;
 mod package;
@@ -33,6 +38,7 @@ use std::sync::Arc;
 use utoipa::OpenApi;
 
 pub use checks::check_pending;
+pub use compose_session::reap as reap_composes;
 pub use fidelity::{FLAG_PERCENT, Measured, measure};
 pub use package::import_dir;
 
@@ -87,6 +93,18 @@ pub static MIGRATIONS: &[Migration] = &[
         up: include_str!("../migrations/0008_design_compose_size.up.sql"),
         down: include_str!("../migrations/0008_design_compose_size.down.sql"),
     },
+    Migration {
+        version: 9,
+        name: "0009_design_compose_mode",
+        up: include_str!("../migrations/0009_design_compose_mode.up.sql"),
+        down: include_str!("../migrations/0009_design_compose_mode.down.sql"),
+    },
+    Migration {
+        version: 10,
+        name: "0010_design_compose_frame",
+        up: include_str!("../migrations/0010_design_compose_frame.up.sql"),
+        down: include_str!("../migrations/0010_design_compose_frame.down.sql"),
+    },
 ];
 
 /// T8: 25 MB per asset, 2 GB for the library; both can only be lowered by the person (the upload
@@ -112,6 +130,7 @@ const SETTINGS: &[ModuleSetting] = &[
 const DESTRUCTIVE: &[(&str, &str)] = &[];
 const NON_DESTRUCTIVE: &[(&str, &str)] = &[
     ("POST", "/docs/{doc}/archive"),
+    ("POST", "/docs/{doc}/unarchive"),
     ("DELETE", "/assets/{sha}"),
     ("DELETE", "/collections/{id}"),
     ("POST", "/docs"),
@@ -193,6 +212,7 @@ pub use sync::Limits;
         docs::get,
         docs::patch,
         docs::archive,
+        docs::unarchive,
         docs::take_over,
         docs::resume,
         docs::link,
@@ -275,6 +295,7 @@ impl Module for Design {
             .route("/docs", get(docs::list).post(docs::create))
             .route("/docs/{doc}", get(docs::get).patch(docs::patch))
             .route("/docs/{doc}/archive", post(docs::archive))
+            .route("/docs/{doc}/unarchive", post(docs::unarchive))
             .route("/docs/{doc}/take-over", post(docs::take_over))
             .route("/docs/{doc}/resume", post(docs::resume))
             .route("/docs/{doc}/sync", get(ws::sync))
@@ -376,6 +397,7 @@ impl Module for Design {
             "design.doc.created",
             "design.doc.changed",
             "design.doc.archived",
+            "design.doc.unarchived",
             "design.doc.taken_over",
             "design.doc.resumed",
             "design.doc.linked",
@@ -401,9 +423,10 @@ impl Module for Design {
         ]
     }
 
-    /// V6-01: fonts and Icon Composer zips go to a runner's sandboxed helper (`checks`).
+    /// V6-01: fonts and Icon Composer zips go to a runner's sandboxed helper (`checks`); stuck composes fail
+    /// (`compose_session::reap`).
     fn jobs(&self) -> Vec<ainkrad_core_server::jobs::Job> {
-        vec![checks::job()]
+        vec![checks::job(), compose_session::job()]
     }
 
     fn attach(&self, app: &App) {
@@ -421,6 +444,9 @@ impl Module for Design {
             "collection",
             "path",
             "screen",
+            "limit",
+            "offset",
+            "sort",
         ]
     }
 

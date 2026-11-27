@@ -102,6 +102,9 @@
 // Text tool: I-beam.
 #define DE_CURSOR_TEXT 8
 
+// Just outside a corner of the selection bounds: a drag there rotates the selection (⇧ snaps to 15°).
+#define DE_CURSOR_ROTATE 9
+
 // `de_set_tool` tools. Drawing tools return to `DE_TOOL_SELECT` after one node (the pen after one path).
 #define DE_TOOL_SELECT 0
 
@@ -161,6 +164,9 @@
 #define DE_MAX_SELECT_IDS 4096
 
 #define DE_MAX_BLOB_BYTES (25 << 20)
+
+// Clipboard JSON `de_copy` writes and `de_paste` takes.
+#define DE_MAX_CLIP_BYTES (8 << 20)
 
 #ifdef __cplusplus
 extern "C" {
@@ -320,8 +326,9 @@ int32_t de_fit_rect(uint64_t h,
 int32_t de_fit_selection(uint64_t h);
 
 // Pointer at view point (x, y): `DE_POINTER_*` phase, `DE_MOD_*` bits. Down selects (shift toggles); a drag moves
-// the selection (option: a copy of it; ⌘: no snapping), resizes it from a handle, or draws a marquee; up writes the
-// move or resize as one undo step. A move without a press is a hover.
+// the selection (option: a copy of it; ⌘: no snapping), resizes it from a handle, rotates it from just outside a
+// corner (`DE_CURSOR_ROTATE`; ⇧ snaps to 15°), or draws a marquee; up writes the move, resize or rotation as one
+// undo step. Locked nodes are looked through and never moved. A move without a press is a hover.
 int32_t de_pointer(uint64_t h,
                    uint32_t phase,
                    float x,
@@ -365,15 +372,43 @@ int32_t de_magnify(uint64_t h, float factor, float x, float y);
 // `DE_KEY_*` with `DE_MOD_*` bits; unknown keys are ignored.
 int32_t de_key(uint64_t h, uint32_t key, uint32_t mods);
 
+// This document's own tokens (a design-system doc): a JSON array `[{"name", "kind", "day", "night"}]` in name order,
+// the literals as stored (`de_tokens` lists the linked system's, names and kinds only).
+//
+// # Safety
+// See `put`.
+int32_t de_doc_tokens(uint64_t h,
+                      uint8_t *out,
+                      size_t cap,
+                      size_t *out_len);
+
+// Node `node_id` as PNG bytes, rendered by Skia on the CPU (not the Metal surface) at `scale` (1 to 4) in the day or
+// the night theme (`night` non-zero), on a transparent background. Sized like the other readers: `DE_ERR_SMALL_BUFFER`
+// with the length in `*out_len` (it can be megabytes), then call again. `DE_ERR_INVALID` for an unknown node,
+// `DE_ERR_ARG` for a bad scale, `DE_ERR_TOO_LARGE` over 16384 px a side or 64 million pixels.
+//
+// # Safety
+// `node_id..+len` readable; see `put`.
+int32_t de_export_png(uint64_t h,
+                      const uint8_t *node_id,
+                      size_t len,
+                      float scale,
+                      int32_t night,
+                      uint8_t *out,
+                      size_t cap,
+                      size_t *out_len);
+
 // Selected node ids, a JSON array.
 //
 // # Safety
 // See `put`.
 int32_t de_selection(uint64_t h, uint8_t *out, size_t cap, size_t *out_len);
 
-// The node tree for the layers panel, a JSON array `[{id, type, parent, order, name, hidden}]` in id order (the App
-// sorts siblings by `order`). `parent` is the effective parent (`null` for pages and detached roots); `hidden` is
-// `props.visible == false`. Output grows with the document, so size the buffer from `*out_len` on `DE_ERR_SMALL_BUFFER`.
+// The node tree for the layers panel, a JSON array `[{id, type, parent, order, name, hidden, locked, rotation}]` in id
+// order (the App sorts siblings by `order`). `parent` is the effective parent (`null` for pages and detached roots);
+// `hidden` is `props.visible == false`, `locked` is `props.locked == true` (the canvas looks through it; `de_select`
+// still selects it), `rotation` is `props.rotation` in degrees (0 when unset). Output grows with the document, so
+// size the buffer from `*out_len` on `DE_ERR_SMALL_BUFFER`.
 //
 // # Safety
 // See `put`.
@@ -412,11 +447,16 @@ int32_t de_node(uint64_t h,
                 size_t cap,
                 size_t *out_len);
 
-// The deepest visible node at view point (x, y): `{id, artboard, path}` or `null`.
+// The deepest visible node at view point (x, y), locked nodes looked through: `{id, artboard, path}` or `null`.
 //
 // # Safety
 // See `put`.
-int32_t de_hit(uint64_t h, float x, float y, uint8_t *out, size_t cap, size_t *out_len);
+int32_t de_hit(uint64_t h,
+               float x,
+               float y,
+               uint8_t *out,
+               size_t cap,
+               size_t *out_len);
 
 // Asset hashes the renderer wanted and did not have (JSON array): fetch them, then `de_asset_add`.
 //
@@ -528,6 +568,66 @@ int32_t de_needs_frame(uint64_t h);
 // `texture` is a live `id<MTLTexture>`.
 int32_t de_draw_metal(uint64_t h,
                       void *texture);
+
+// The clipboard JSON of the nodes in `ids_json` (a JSON array of ids; `len == 0`: the selection), subtrees
+// included, for `NSPasteboard`: `{"format": "ainkrad-design/1", "doc", "nodes": [{type, name, props, text?, at: [x, y],
+// children}]}`. Ids are left out (a paste makes new ones). A page or an unknown id is `DE_ERR_INVALID`; more than
+// `DE_MAX_CLIP_BYTES` is `DE_ERR_TOO_LARGE`.
+//
+// # Safety
+// `ids_json..+len` readable; see `put`.
+int32_t de_copy(uint64_t h,
+                const uint8_t *ids_json,
+                size_t len,
+                uint8_t *out,
+                size_t cap,
+                size_t *out_len);
+
+// Paste clipboard JSON from `de_copy` (this or another design) into node `parent` (`parent_len == 0`: the current
+// page) with new ids: one undo step, the pasted roots selected. They keep their position, or with `at` non-zero
+// the pasted bounds' top-left goes to view point (x, y). In an auto-layout parent they join the flow at its end.
+// Bad JSON, a parent that cannot hold children or a node the validators refuse is `DE_ERR_INVALID` (nothing
+// written). ⌘D and ⌥-drag stay `DE_KEY_DUPLICATE` and `de_pointer`.
+//
+// # Safety
+// `json..+len` and `parent..+parent_len` readable.
+int32_t de_paste(uint64_t h,
+                 const uint8_t *json,
+                 size_t len,
+                 const uint8_t *parent,
+                 size_t parent_len,
+                 float x,
+                 float y,
+                 uint32_t at);
+
+// Group the selected siblings: a new frame `Group` sized to their boxes, where the topmost was, holding them in
+// place; the group is selected. One undo step. Nothing selected or different parents: `DE_ERR_INVALID`.
+int32_t de_group(uint64_t h);
+
+// Ungroup: the children of each selected frame go where the frame was (same place on the canvas), the frame is
+// removed and the children are selected. One undo step. No frame selected: `DE_ERR_INVALID`.
+int32_t de_ungroup(uint64_t h);
+
+// Create a component from the selection: one selected frame becomes a component in place (new id, same props
+// and children), anything else is wrapped in a new component like `de_group`. One undo step; it is selected.
+int32_t de_component_create(uint64_t h);
+
+// Insert an instance of `component` (`"<doc>/<node>"`, or a bare node id of this design) with its top-left at
+// view point (x, y), inside the frame there (else the page), and select it. One undo step. A component not in
+// this design or its design system is `DE_ERR_INVALID`.
+//
+// # Safety
+// `component..+len` readable.
+int32_t de_instance_insert(uint64_t h,
+                           const uint8_t *component,
+                           size_t len,
+                           float x,
+                           float y);
+
+// Detach each selected instance: a frame in its place with copies of the component's nodes, overrides written
+// in (nested instances stay instances). One undo step; the frames are selected. No detachable instance selected:
+// `DE_ERR_INVALID`.
+int32_t de_instance_detach(uint64_t h);
 
 #ifdef __cplusplus
 }  // extern "C"

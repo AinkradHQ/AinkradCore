@@ -1,5 +1,5 @@
 # The engine host and its C ABI (V2-02, T4, B1): what the Mac app links as `DesignEngine.xcframework`
-# (`make engine`, scripts/design-engine.sh). The only crate with `unsafe`, confined to `src/ffi.rs`.
+# (`make engine`, scripts/design-engine.sh). The only crate with `unsafe`, confined to `src/ffi.rs` and `src/ffi_tools.rs`.
 [package]
 name = "design-ffi"
 version.workspace = true

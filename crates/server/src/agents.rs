@@ -586,6 +586,30 @@ pub fn authorize_module_session(app: &App, session: &str) {
         .insert(session.to_owned(), app.hub.module_elevation());
 }
 
+/// Stops a live session a module started through a chain ([`authorize_module_session`]) and gave
+/// up on (the Design composer's reaper): one that never reached its runner is ended here, a
+/// running one is told to stop with the proof kept for it. Nothing to do for one that is over, or
+/// whose proof this process no longer holds (the supervisor ends it as for any session).
+pub async fn stop_module_session(app: &App, id: &str) -> Result<(), Refusal> {
+    let Some(s) = store::get(&app.pool, id).await?.filter(Session::live) else {
+        return Ok(());
+    };
+    if crate::store::alloc::end_unstarted(&app.pool, id, &app.clock.now()).await? {
+        return Ok(());
+    }
+    let Some(proof) = app.agents.elevated.lock().unwrap().get(id).copied() else {
+        return Ok(());
+    };
+    let stop = Command::AgentStop(ainkrad_proto::v2::AgentStop {
+        session: id.to_owned(),
+        kill: false,
+        turn: false,
+    });
+    let ev = ask(app, &s.runner, stop, app.agents.config.answer, Some(proof)).await?;
+    store::apply(&app.pool, id, &ev, &app.clock.now()).await?;
+    Ok(())
+}
+
 /// Keeps the caller's proof for a message that restarts a live session (its supervisor sends the
 /// runner commands with it).
 pub fn authorize_message(app: &App, caller: &Caller, session: &str) {

@@ -36,6 +36,7 @@ use std::sync::{Arc, Mutex};
 use crate::host::Host;
 
 pub use crate::codes::*;
+pub use crate::ffi_tools::*;
 
 /// The largest single Rust allocation. yrs reserves wire-sized collections (`try_reserve(len)` with `len` read from
 /// the bytes) before reading their contents; on macOS such a reservation succeeds lazily and the process is killed
@@ -106,7 +107,7 @@ pub(crate) fn with(h: u64, f: impl FnOnce(&mut Host) -> R) -> i32 {
     })
 }
 
-fn ok(r: Result<(), i32>) -> R {
+pub(crate) fn ok(r: Result<(), i32>) -> R {
     r.map(|()| DE_OK)
 }
 
@@ -477,8 +478,9 @@ pub extern "C" fn de_fit_selection(h: u64) -> i32 {
 }
 
 /// Pointer at view point (x, y): `DE_POINTER_*` phase, `DE_MOD_*` bits. Down selects (shift toggles); a drag moves
-/// the selection (option: a copy of it; ⌘: no snapping), resizes it from a handle, or draws a marquee; up writes the
-/// move or resize as one undo step. A move without a press is a hover.
+/// the selection (option: a copy of it; ⌘: no snapping), resizes it from a handle, rotates it from just outside a
+/// corner (`DE_CURSOR_ROTATE`; ⇧ snaps to 15°), or draws a marquee; up writes the move, resize or rotation as one
+/// undo step. Locked nodes are looked through and never moved. A move without a press is a hover.
 #[unsafe(no_mangle)]
 pub extern "C" fn de_pointer(h: u64, phase: u32, x: f32, y: f32, mods: u32) -> i32 {
     with(h, |e| ok(e.pointer(phase, x, y, mods)))
@@ -548,6 +550,47 @@ pub extern "C" fn de_key(h: u64, key: u32, mods: u32) -> i32 {
 
 // ---- queries ------------------------------------------------------------------------------------------------------
 
+/// This document's own tokens (a design-system doc): a JSON array `[{"name", "kind", "day", "night"}]` in name order,
+/// the literals as stored (`de_tokens` lists the linked system's, names and kinds only).
+///
+/// # Safety
+/// See `put`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn de_doc_tokens(
+    h: u64,
+    out: *mut u8,
+    cap: usize,
+    out_len: *mut usize,
+) -> i32 {
+    with(h, |e| unsafe {
+        put(&e.doc_tokens_json(), out, cap, out_len)
+    })
+}
+
+/// Node `node_id` as PNG bytes, rendered by Skia on the CPU (not the Metal surface) at `scale` (1 to 4) in the day or
+/// the night theme (`night` non-zero), on a transparent background. Sized like the other readers: `DE_ERR_SMALL_BUFFER`
+/// with the length in `*out_len` (it can be megabytes), then call again. `DE_ERR_INVALID` for an unknown node,
+/// `DE_ERR_ARG` for a bad scale, `DE_ERR_TOO_LARGE` over 16384 px a side or 64 million pixels.
+///
+/// # Safety
+/// `node_id..+len` readable; see `put`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn de_export_png(
+    h: u64,
+    node_id: *const u8,
+    len: usize,
+    scale: f32,
+    night: i32,
+    out: *mut u8,
+    cap: usize,
+    out_len: *mut usize,
+) -> i32 {
+    with(h, |e| unsafe {
+        let id = text(node_id, len, DE_MAX_ID_BYTES)?;
+        put(&e.export_png(id, scale, night != 0)?, out, cap, out_len)
+    })
+}
+
 /// Selected node ids, a JSON array.
 ///
 /// # Safety
@@ -564,9 +607,11 @@ pub unsafe extern "C" fn de_selection(
     })
 }
 
-/// The node tree for the layers panel, a JSON array `[{id, type, parent, order, name, hidden}]` in id order (the App
-/// sorts siblings by `order`). `parent` is the effective parent (`null` for pages and detached roots); `hidden` is
-/// `props.visible == false`. Output grows with the document, so size the buffer from `*out_len` on `DE_ERR_SMALL_BUFFER`.
+/// The node tree for the layers panel, a JSON array `[{id, type, parent, order, name, hidden, locked, rotation}]` in id
+/// order (the App sorts siblings by `order`). `parent` is the effective parent (`null` for pages and detached roots);
+/// `hidden` is `props.visible == false`, `locked` is `props.locked == true` (the canvas looks through it; `de_select`
+/// still selects it), `rotation` is `props.rotation` in degrees (0 when unset). Output grows with the document, so
+/// size the buffer from `*out_len` on `DE_ERR_SMALL_BUFFER`.
 ///
 /// # Safety
 /// See `put`.
@@ -617,7 +662,7 @@ pub unsafe extern "C" fn de_node(
     })
 }
 
-/// The deepest visible node at view point (x, y): `{id, artboard, path}` or `null`.
+/// The deepest visible node at view point (x, y), locked nodes looked through: `{id, artboard, path}` or `null`.
 ///
 /// # Safety
 /// See `put`.
