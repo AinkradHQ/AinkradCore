@@ -171,3 +171,44 @@ async fn only_the_core_marks_a_refusal() {
             .all(|k| !k.as_str().starts_with("ainkrad-"))
     );
 }
+
+/// A port stream that does not open, or a runner that cannot be reached, is the Core's own JSON
+/// refusal with the marker, never the public link's HTML page.
+#[tokio::test]
+async fn a_failed_dial_is_a_marked_json_refusal() {
+    let mut fx = fx().await;
+    let dial = local().await;
+    fx.app.preview = Arc::new(Preview::with_dial(dial.clone()));
+    let p = private(&fx).await;
+    let uri = format!("/api/v1/projects/{p}/preview/");
+    let go = |fx: &Fx| router(fx.app.clone()).oneshot(req(Method::GET, &uri, Some(&fx.dev), None));
+    dial.busy.store(true, std::sync::atomic::Ordering::Relaxed);
+    let res = go(&fx).await.unwrap();
+    assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(res.headers()[crate::api::v1::REFUSAL], "1");
+    assert_eq!(res.headers()["retry-after"], "1");
+    let body: Value =
+        serde_json::from_slice(&to_bytes(res.into_body(), 1 << 16).await.unwrap()).unwrap();
+    assert_eq!(body["code"], "busy");
+    // A runner nobody answers on: the service's port is closed.
+    let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = closed.local_addr().unwrap();
+    drop(closed);
+    fx.app.preview = Arc::new(Preview::with_dial(Arc::new(super::host_router::Local {
+        addr,
+        opened: Mutex::default(),
+        busy: std::sync::atomic::AtomicBool::new(false),
+    })));
+    let res = go(&fx).await.unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_GATEWAY);
+    assert_eq!(res.headers()[crate::api::v1::REFUSAL], "1");
+    let body: Value =
+        serde_json::from_slice(&to_bytes(res.into_body(), 1 << 16).await.unwrap()).unwrap();
+    assert_eq!(body["code"], "runner_unreachable");
+    assert!(
+        body["message"]
+            .as_str()
+            .unwrap()
+            .contains("could not be reached")
+    );
+}

@@ -82,9 +82,10 @@ fn refused(status: StatusCode, code: &'static str, why: &str) -> Response {
         as any other; the Mac app serves it from its own URL scheme. 409 `not_running` when the \
         project has no running run (the words say why), 409 `no_preview` when no service has an \
         exposed port, 404 for no such project; 503 `busy` (with `Retry-After`) past 6 requests in \
-        flight for the device or 8 for the project; 502 when the runner cannot be reached, 502 \
-        `redirect_refused` when the app redirects to another site, 504 when the app does not \
-        answer in 25 s. No WebSocket upgrade. GET and HEAD are `read` on purpose: viewing is the \
+        flight for the device or 8 for the project or the runner (`busy`); 502 \
+        `runner_unreachable` when the runner cannot be reached, 504 `timeout`; 502 \
+        `redirect_refused` when the app redirects to another site (504 after 25 s with no \
+        answer). No WebSocket upgrade. GET and HEAD are `read` on purpose: viewing is the \
         point. Answers: `Set-Cookie` paths and `Location` are moved under \
         `/api/v1/projects/{id}/preview`; `Cache-Control: no-store`, \
         `Cross-Origin-Resource-Policy: same-origin` and the CSP `sandbox allow-scripts \
@@ -171,7 +172,9 @@ async fn forward(app: App, device: &str, req: Request) -> Result<Response, Respo
         port,
     };
     let dial = app.preview.dial(&app);
-    let resp = exchange(&*dial, &run.runner, open, out, permit).await?;
+    let resp = exchange(&*dial, &run.runner, open, out, permit)
+        .await
+        .map_err(|page| failed(page.status()))?;
     // Nobody asked for an upgrade: a 101 is not passed on.
     if resp.status() == StatusCode::SWITCHING_PROTOCOLS {
         let why = "the project answered with an upgrade nobody asked for";
@@ -183,6 +186,28 @@ async fn forward(app: App, device: &str, req: Request) -> Result<Response, Respo
         return Err(refused(StatusCode::BAD_GATEWAY, "redirect_refused", why));
     }
     Ok(out)
+}
+
+/// The Core's own JSON refusal (with `Ainkrad-Refusal`) for an exchange that failed, in place of
+/// the public link's HTML page of the same status.
+fn failed(status: StatusCode) -> Response {
+    match status {
+        StatusCode::SERVICE_UNAVAILABLE => {
+            let why = "the runner is too busy to open the preview; try again";
+            let mut r = refused(status, "busy", why);
+            r.headers_mut()
+                .insert(header::RETRY_AFTER, HeaderValue::from_static("1"));
+            r
+        }
+        StatusCode::GATEWAY_TIMEOUT => {
+            let why = "the project's app did not answer in 25 seconds";
+            refused(status, "timeout", why)
+        }
+        _ => {
+            let why = "the project's runner could not be reached";
+            refused(StatusCode::BAD_GATEWAY, "runner_unreachable", why)
+        }
+    }
 }
 
 /// What every preview answer carries: an opaque-origin sandbox, so wherever a browser renders
