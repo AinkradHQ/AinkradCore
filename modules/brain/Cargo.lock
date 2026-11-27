@@ -99,7 +99,7 @@ dependencies = [
 
 [[package]]
 name = "ainkrad-core"
-version = "0.10.12"
+version = "0.10.13"
 
 [[package]]
 name = "ainkrad-core-brain"
@@ -116,7 +116,7 @@ dependencies = [
 
 [[package]]
 name = "ainkrad-core-server"
-version = "0.10.12"
+version = "0.10.13"
 dependencies = [
  "age",
  "ainkrad-core",
@@ -158,7 +158,7 @@ dependencies = [
 
 [[package]]
 name = "ainkrad-embed"
-version = "0.10.12"
+version = "0.10.13"
 dependencies = [
  "candle-core",
  "candle-nn",
@@ -172,7 +172,7 @@ dependencies = [
 
 [[package]]
 name = "ainkrad-proto"
-version = "0.10.12"
+version = "0.10.13"
 dependencies = [
  "base64 0.22.1",
  "blake3",
@@ -184,7 +184,7 @@ dependencies = [
 
 [[package]]
 name = "ainkrad-providers"
-version = "0.10.12"
+version = "0.10.13"
 dependencies = [
  "reqwest 0.12.28",
  "serde_json",
@@ -193,7 +193,7 @@ dependencies = [
 
 [[package]]
 name = "ainkrad-sys"
-version = "0.10.12"
+version = "0.10.13"
 dependencies = [
  "ainkrad-proto",
  "libc",
