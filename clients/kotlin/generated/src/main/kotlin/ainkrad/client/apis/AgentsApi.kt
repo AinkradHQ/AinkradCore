@@ -437,10 +437,11 @@ import io.ktor.http.ParametersBuilder
          * @param before Sessions with an &#x60;index&#x60; below this; absent, from the newest. (optional)
          * @param limit  (optional)
          * @param run Only the attempts of this run (its first attempt&#39;s id, &#x60;as_…&#x60;). (optional)
+         * @param project Only the sessions started for this project (its id; API 110). An older Core ignores it. (optional)
          * @return kotlin.collections.List<AgentSession>
         */
             @Suppress("UNCHECKED_CAST")
-        open suspend fun listAgentSessions(before: kotlin.Long?, limit: kotlin.Int?, run: kotlin.String?): HttpResponse<kotlin.collections.List<AgentSession>> {
+        open suspend fun listAgentSessions(before: kotlin.Long?, limit: kotlin.Int?, run: kotlin.String?, project: kotlin.Long?): HttpResponse<kotlin.collections.List<AgentSession>> {
 
             val localVariableAuthNames = listOf<String>("device_signature")
 
@@ -451,6 +452,7 @@ import io.ktor.http.ParametersBuilder
             before?.apply { localVariableQuery["before"] = listOf("$before") }
             limit?.apply { localVariableQuery["limit"] = listOf("$limit") }
             run?.apply { localVariableQuery["run"] = listOf("$run") }
+            project?.apply { localVariableQuery["project"] = listOf("$project") }
 
             val localVariableHeaders = mutableMapOf<String, String>()
 

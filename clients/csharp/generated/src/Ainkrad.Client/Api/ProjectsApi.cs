@@ -431,6 +431,26 @@ namespace Ainkrad.Client.Api
         /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
         /// <param name="id">The project&#39;s id</param>
         /// <param name="run">One of the project&#39;s live runs by id; default the newest live run. (optional)</param>
+        /// <returns>RunMetrics</returns>
+        RunMetrics GetProjectRunMetrics(string id, string? run = default);
+
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <remarks>
+        /// 
+        /// </remarks>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id">The project&#39;s id</param>
+        /// <param name="run">One of the project&#39;s live runs by id; default the newest live run. (optional)</param>
+        /// <returns>ApiResponse of RunMetrics</returns>
+        ApiResponse<RunMetrics> GetProjectRunMetricsWithHttpInfo(string id, string? run = default);
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id">The project&#39;s id</param>
+        /// <param name="run">One of the project&#39;s live runs by id; default the newest live run. (optional)</param>
         /// <returns>RunServices</returns>
         RunServices GetProjectRunServices(string id, string? run = default);
 
@@ -703,6 +723,26 @@ namespace Ainkrad.Client.Api
         /// <param name="env">The environment</param>
         /// <returns>ApiResponse of List&lt;RunVar&gt;</returns>
         ApiResponse<List<RunVar>> ListRunVarsWithHttpInfo(string id, string config, string env);
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id">The project&#39;s id</param>
+        /// <param name="path">The path on the running app, slashes included (&#x60;/api/v1/projects/7/preview/&#x60; is its &#x60;/&#x60;); the query string is passed on as is</param>
+        /// <returns></returns>
+        void PreviewProject(string id, string path);
+
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <remarks>
+        /// 
+        /// </remarks>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id">The project&#39;s id</param>
+        /// <param name="path">The path on the running app, slashes included (&#x60;/api/v1/projects/7/preview/&#x60; is its &#x60;/&#x60;); the query string is passed on as is</param>
+        /// <returns>ApiResponse of Object(void)</returns>
+        ApiResponse<Object> PreviewProjectWithHttpInfo(string id, string path);
         /// <summary>
         /// 
         /// </summary>
@@ -1031,6 +1071,28 @@ namespace Ainkrad.Client.Api
         /// <param name="updateProject"></param>
         /// <returns>ApiResponse of ProjectInfo</returns>
         ApiResponse<ProjectInfo> UpdateProjectWithHttpInfo(string id, UpdateProject updateProject);
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id">The project&#39;s id</param>
+        /// <param name="repo">The repo&#39;s id</param>
+        /// <param name="updateProjectRepo"></param>
+        /// <returns>ProjectInfo</returns>
+        ProjectInfo UpdateProjectRepo(string id, string repo, UpdateProjectRepo updateProjectRepo);
+
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <remarks>
+        /// 
+        /// </remarks>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id">The project&#39;s id</param>
+        /// <param name="repo">The repo&#39;s id</param>
+        /// <param name="updateProjectRepo"></param>
+        /// <returns>ApiResponse of ProjectInfo</returns>
+        ApiResponse<ProjectInfo> UpdateProjectRepoWithHttpInfo(string id, string repo, UpdateProjectRepo updateProjectRepo);
         /// <summary>
         /// 
         /// </summary>
@@ -1570,6 +1632,31 @@ namespace Ainkrad.Client.Api
         /// <param name="id">The project&#39;s id</param>
         /// <param name="run">One of the project&#39;s live runs by id; default the newest live run. (optional)</param>
         /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
+        /// <returns>Task of RunMetrics</returns>
+        System.Threading.Tasks.Task<RunMetrics> GetProjectRunMetricsAsync(string id, string? run = default, System.Threading.CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <remarks>
+        /// 
+        /// </remarks>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id">The project&#39;s id</param>
+        /// <param name="run">One of the project&#39;s live runs by id; default the newest live run. (optional)</param>
+        /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
+        /// <returns>Task of ApiResponse (RunMetrics)</returns>
+        System.Threading.Tasks.Task<ApiResponse<RunMetrics>> GetProjectRunMetricsWithHttpInfoAsync(string id, string? run = default, System.Threading.CancellationToken cancellationToken = default);
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <remarks>
+        /// 
+        /// </remarks>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id">The project&#39;s id</param>
+        /// <param name="run">One of the project&#39;s live runs by id; default the newest live run. (optional)</param>
+        /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
         /// <returns>Task of RunServices</returns>
         System.Threading.Tasks.Task<RunServices> GetProjectRunServicesAsync(string id, string? run = default, System.Threading.CancellationToken cancellationToken = default);
 
@@ -1908,6 +1995,31 @@ namespace Ainkrad.Client.Api
         /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
         /// <returns>Task of ApiResponse (List&lt;RunVar&gt;)</returns>
         System.Threading.Tasks.Task<ApiResponse<List<RunVar>>> ListRunVarsWithHttpInfoAsync(string id, string config, string env, System.Threading.CancellationToken cancellationToken = default);
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <remarks>
+        /// 
+        /// </remarks>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id">The project&#39;s id</param>
+        /// <param name="path">The path on the running app, slashes included (&#x60;/api/v1/projects/7/preview/&#x60; is its &#x60;/&#x60;); the query string is passed on as is</param>
+        /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
+        /// <returns>Task of void</returns>
+        System.Threading.Tasks.Task PreviewProjectAsync(string id, string path, System.Threading.CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <remarks>
+        /// 
+        /// </remarks>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id">The project&#39;s id</param>
+        /// <param name="path">The path on the running app, slashes included (&#x60;/api/v1/projects/7/preview/&#x60; is its &#x60;/&#x60;); the query string is passed on as is</param>
+        /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
+        /// <returns>Task of ApiResponse</returns>
+        System.Threading.Tasks.Task<ApiResponse<Object>> PreviewProjectWithHttpInfoAsync(string id, string path, System.Threading.CancellationToken cancellationToken = default);
         /// <summary>
         /// 
         /// </summary>
@@ -2316,6 +2428,33 @@ namespace Ainkrad.Client.Api
         /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
         /// <returns>Task of ApiResponse (ProjectInfo)</returns>
         System.Threading.Tasks.Task<ApiResponse<ProjectInfo>> UpdateProjectWithHttpInfoAsync(string id, UpdateProject updateProject, System.Threading.CancellationToken cancellationToken = default);
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <remarks>
+        /// 
+        /// </remarks>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id">The project&#39;s id</param>
+        /// <param name="repo">The repo&#39;s id</param>
+        /// <param name="updateProjectRepo"></param>
+        /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
+        /// <returns>Task of ProjectInfo</returns>
+        System.Threading.Tasks.Task<ProjectInfo> UpdateProjectRepoAsync(string id, string repo, UpdateProjectRepo updateProjectRepo, System.Threading.CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <remarks>
+        /// 
+        /// </remarks>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id">The project&#39;s id</param>
+        /// <param name="repo">The repo&#39;s id</param>
+        /// <param name="updateProjectRepo"></param>
+        /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
+        /// <returns>Task of ApiResponse (ProjectInfo)</returns>
+        System.Threading.Tasks.Task<ApiResponse<ProjectInfo>> UpdateProjectRepoWithHttpInfoAsync(string id, string repo, UpdateProjectRepo updateProjectRepo, System.Threading.CancellationToken cancellationToken = default);
         /// <summary>
         /// 
         /// </summary>
@@ -5330,6 +5469,143 @@ namespace Ainkrad.Client.Api
         /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
         /// <param name="id">The project&#39;s id</param>
         /// <param name="run">One of the project&#39;s live runs by id; default the newest live run. (optional)</param>
+        /// <returns>RunMetrics</returns>
+        public RunMetrics GetProjectRunMetrics(string id, string? run = default)
+        {
+            Ainkrad.Client.Client.ApiResponse<RunMetrics> localVarResponse = GetProjectRunMetricsWithHttpInfo(id, run);
+            return localVarResponse.Data;
+        }
+
+        /// <summary>
+        ///  
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id">The project&#39;s id</param>
+        /// <param name="run">One of the project&#39;s live runs by id; default the newest live run. (optional)</param>
+        /// <returns>ApiResponse of RunMetrics</returns>
+        public Ainkrad.Client.Client.ApiResponse<RunMetrics> GetProjectRunMetricsWithHttpInfo(string id, string? run = default)
+        {
+            // verify the required parameter 'id' is set
+            if (id == null)
+                throw new Ainkrad.Client.Client.ApiException(400, "Missing required parameter 'id' when calling ProjectsApi->GetProjectRunMetrics");
+
+            Ainkrad.Client.Client.RequestOptions localVarRequestOptions = new Ainkrad.Client.Client.RequestOptions();
+
+            string[] _contentTypes = new string[] {
+            };
+
+            // to determine the Accept header
+            string[] _accepts = new string[] {
+                "application/json"
+            };
+
+            var localVarContentType = Ainkrad.Client.Client.ClientUtils.SelectHeaderContentType(_contentTypes);
+            if (localVarContentType != null) localVarRequestOptions.HeaderParameters.Add("Content-Type", localVarContentType);
+
+            var localVarAccept = Ainkrad.Client.Client.ClientUtils.SelectHeaderAccept(_accepts);
+            if (localVarAccept != null) localVarRequestOptions.HeaderParameters.Add("Accept", localVarAccept);
+
+            localVarRequestOptions.PathParameters.Add("id", Ainkrad.Client.Client.ClientUtils.ParameterToString(id)); // path parameter
+            if (run != null)
+            {
+                localVarRequestOptions.QueryParameters.Add(Ainkrad.Client.Client.ClientUtils.ParameterToMultiMap("", "run", run));
+            }
+
+            // authentication (device_signature) required
+            if (!string.IsNullOrEmpty(this.Configuration.GetApiKeyWithPrefix("Ainkrad-Signature")))
+            {
+                localVarRequestOptions.HeaderParameters.Add("Ainkrad-Signature", this.Configuration.GetApiKeyWithPrefix("Ainkrad-Signature"));
+            }
+
+            // make the HTTP request
+            var localVarResponse = this.Client.Get<RunMetrics>("/api/v1/projects/{id}/run/metrics", localVarRequestOptions, this.Configuration);
+
+            if (this.ExceptionFactory != null)
+            {
+                Exception _exception = this.ExceptionFactory("GetProjectRunMetrics", localVarResponse);
+                if (_exception != null) throw _exception;
+            }
+
+            return localVarResponse;
+        }
+
+        /// <summary>
+        ///  
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id">The project&#39;s id</param>
+        /// <param name="run">One of the project&#39;s live runs by id; default the newest live run. (optional)</param>
+        /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
+        /// <returns>Task of RunMetrics</returns>
+        public async System.Threading.Tasks.Task<RunMetrics> GetProjectRunMetricsAsync(string id, string? run = default, System.Threading.CancellationToken cancellationToken = default)
+        {
+            Ainkrad.Client.Client.ApiResponse<RunMetrics> localVarResponse = await GetProjectRunMetricsWithHttpInfoAsync(id, run, cancellationToken).ConfigureAwait(false);
+            return localVarResponse.Data;
+        }
+
+        /// <summary>
+        ///  
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id">The project&#39;s id</param>
+        /// <param name="run">One of the project&#39;s live runs by id; default the newest live run. (optional)</param>
+        /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
+        /// <returns>Task of ApiResponse (RunMetrics)</returns>
+        public async System.Threading.Tasks.Task<Ainkrad.Client.Client.ApiResponse<RunMetrics>> GetProjectRunMetricsWithHttpInfoAsync(string id, string? run = default, System.Threading.CancellationToken cancellationToken = default)
+        {
+            // verify the required parameter 'id' is set
+            if (id == null)
+                throw new Ainkrad.Client.Client.ApiException(400, "Missing required parameter 'id' when calling ProjectsApi->GetProjectRunMetrics");
+
+
+            Ainkrad.Client.Client.RequestOptions localVarRequestOptions = new Ainkrad.Client.Client.RequestOptions();
+
+            string[] _contentTypes = new string[] {
+            };
+
+            // to determine the Accept header
+            string[] _accepts = new string[] {
+                "application/json"
+            };
+
+
+            var localVarContentType = Ainkrad.Client.Client.ClientUtils.SelectHeaderContentType(_contentTypes);
+            if (localVarContentType != null) localVarRequestOptions.HeaderParameters.Add("Content-Type", localVarContentType);
+
+            var localVarAccept = Ainkrad.Client.Client.ClientUtils.SelectHeaderAccept(_accepts);
+            if (localVarAccept != null) localVarRequestOptions.HeaderParameters.Add("Accept", localVarAccept);
+
+            localVarRequestOptions.PathParameters.Add("id", Ainkrad.Client.Client.ClientUtils.ParameterToString(id)); // path parameter
+            if (run != null)
+            {
+                localVarRequestOptions.QueryParameters.Add(Ainkrad.Client.Client.ClientUtils.ParameterToMultiMap("", "run", run));
+            }
+
+            // authentication (device_signature) required
+            if (!string.IsNullOrEmpty(this.Configuration.GetApiKeyWithPrefix("Ainkrad-Signature")))
+            {
+                localVarRequestOptions.HeaderParameters.Add("Ainkrad-Signature", this.Configuration.GetApiKeyWithPrefix("Ainkrad-Signature"));
+            }
+
+            // make the HTTP request
+
+            var localVarResponse = await this.AsynchronousClient.GetAsync<RunMetrics>("/api/v1/projects/{id}/run/metrics", localVarRequestOptions, this.Configuration, cancellationToken).ConfigureAwait(false);
+
+            if (this.ExceptionFactory != null)
+            {
+                Exception _exception = this.ExceptionFactory("GetProjectRunMetrics", localVarResponse);
+                if (_exception != null) throw _exception;
+            }
+
+            return localVarResponse;
+        }
+
+        /// <summary>
+        ///  
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id">The project&#39;s id</param>
+        /// <param name="run">One of the project&#39;s live runs by id; default the newest live run. (optional)</param>
         /// <returns>RunServices</returns>
         public RunServices GetProjectRunServices(string id, string? run = default)
         {
@@ -7236,6 +7512,143 @@ namespace Ainkrad.Client.Api
             if (this.ExceptionFactory != null)
             {
                 Exception _exception = this.ExceptionFactory("ListRunVars", localVarResponse);
+                if (_exception != null) throw _exception;
+            }
+
+            return localVarResponse;
+        }
+
+        /// <summary>
+        ///  
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id">The project&#39;s id</param>
+        /// <param name="path">The path on the running app, slashes included (&#x60;/api/v1/projects/7/preview/&#x60; is its &#x60;/&#x60;); the query string is passed on as is</param>
+        /// <returns></returns>
+        public void PreviewProject(string id, string path)
+        {
+            PreviewProjectWithHttpInfo(id, path);
+        }
+
+        /// <summary>
+        ///  
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id">The project&#39;s id</param>
+        /// <param name="path">The path on the running app, slashes included (&#x60;/api/v1/projects/7/preview/&#x60; is its &#x60;/&#x60;); the query string is passed on as is</param>
+        /// <returns>ApiResponse of Object(void)</returns>
+        public Ainkrad.Client.Client.ApiResponse<Object> PreviewProjectWithHttpInfo(string id, string path)
+        {
+            // verify the required parameter 'id' is set
+            if (id == null)
+                throw new Ainkrad.Client.Client.ApiException(400, "Missing required parameter 'id' when calling ProjectsApi->PreviewProject");
+
+            // verify the required parameter 'path' is set
+            if (path == null)
+                throw new Ainkrad.Client.Client.ApiException(400, "Missing required parameter 'path' when calling ProjectsApi->PreviewProject");
+
+            Ainkrad.Client.Client.RequestOptions localVarRequestOptions = new Ainkrad.Client.Client.RequestOptions();
+
+            string[] _contentTypes = new string[] {
+            };
+
+            // to determine the Accept header
+            string[] _accepts = new string[] {
+                "application/json"
+            };
+
+            var localVarContentType = Ainkrad.Client.Client.ClientUtils.SelectHeaderContentType(_contentTypes);
+            if (localVarContentType != null) localVarRequestOptions.HeaderParameters.Add("Content-Type", localVarContentType);
+
+            var localVarAccept = Ainkrad.Client.Client.ClientUtils.SelectHeaderAccept(_accepts);
+            if (localVarAccept != null) localVarRequestOptions.HeaderParameters.Add("Accept", localVarAccept);
+
+            localVarRequestOptions.PathParameters.Add("id", Ainkrad.Client.Client.ClientUtils.ParameterToString(id)); // path parameter
+            localVarRequestOptions.PathParameters.Add("path", Ainkrad.Client.Client.ClientUtils.ParameterToString(path)); // path parameter
+
+            // authentication (device_signature) required
+            if (!string.IsNullOrEmpty(this.Configuration.GetApiKeyWithPrefix("Ainkrad-Signature")))
+            {
+                localVarRequestOptions.HeaderParameters.Add("Ainkrad-Signature", this.Configuration.GetApiKeyWithPrefix("Ainkrad-Signature"));
+            }
+
+            // make the HTTP request
+            var localVarResponse = this.Client.Get<Object>("/api/v1/projects/{id}/preview/{path}", localVarRequestOptions, this.Configuration);
+
+            if (this.ExceptionFactory != null)
+            {
+                Exception _exception = this.ExceptionFactory("PreviewProject", localVarResponse);
+                if (_exception != null) throw _exception;
+            }
+
+            return localVarResponse;
+        }
+
+        /// <summary>
+        ///  
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id">The project&#39;s id</param>
+        /// <param name="path">The path on the running app, slashes included (&#x60;/api/v1/projects/7/preview/&#x60; is its &#x60;/&#x60;); the query string is passed on as is</param>
+        /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
+        /// <returns>Task of void</returns>
+        public async System.Threading.Tasks.Task PreviewProjectAsync(string id, string path, System.Threading.CancellationToken cancellationToken = default)
+        {
+            await PreviewProjectWithHttpInfoAsync(id, path, cancellationToken).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        ///  
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id">The project&#39;s id</param>
+        /// <param name="path">The path on the running app, slashes included (&#x60;/api/v1/projects/7/preview/&#x60; is its &#x60;/&#x60;); the query string is passed on as is</param>
+        /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
+        /// <returns>Task of ApiResponse</returns>
+        public async System.Threading.Tasks.Task<Ainkrad.Client.Client.ApiResponse<Object>> PreviewProjectWithHttpInfoAsync(string id, string path, System.Threading.CancellationToken cancellationToken = default)
+        {
+            // verify the required parameter 'id' is set
+            if (id == null)
+                throw new Ainkrad.Client.Client.ApiException(400, "Missing required parameter 'id' when calling ProjectsApi->PreviewProject");
+
+            // verify the required parameter 'path' is set
+            if (path == null)
+                throw new Ainkrad.Client.Client.ApiException(400, "Missing required parameter 'path' when calling ProjectsApi->PreviewProject");
+
+
+            Ainkrad.Client.Client.RequestOptions localVarRequestOptions = new Ainkrad.Client.Client.RequestOptions();
+
+            string[] _contentTypes = new string[] {
+            };
+
+            // to determine the Accept header
+            string[] _accepts = new string[] {
+                "application/json"
+            };
+
+
+            var localVarContentType = Ainkrad.Client.Client.ClientUtils.SelectHeaderContentType(_contentTypes);
+            if (localVarContentType != null) localVarRequestOptions.HeaderParameters.Add("Content-Type", localVarContentType);
+
+            var localVarAccept = Ainkrad.Client.Client.ClientUtils.SelectHeaderAccept(_accepts);
+            if (localVarAccept != null) localVarRequestOptions.HeaderParameters.Add("Accept", localVarAccept);
+
+            localVarRequestOptions.PathParameters.Add("id", Ainkrad.Client.Client.ClientUtils.ParameterToString(id)); // path parameter
+            localVarRequestOptions.PathParameters.Add("path", Ainkrad.Client.Client.ClientUtils.ParameterToString(path)); // path parameter
+
+            // authentication (device_signature) required
+            if (!string.IsNullOrEmpty(this.Configuration.GetApiKeyWithPrefix("Ainkrad-Signature")))
+            {
+                localVarRequestOptions.HeaderParameters.Add("Ainkrad-Signature", this.Configuration.GetApiKeyWithPrefix("Ainkrad-Signature"));
+            }
+
+            // make the HTTP request
+
+            var localVarResponse = await this.AsynchronousClient.GetAsync<Object>("/api/v1/projects/{id}/preview/{path}", localVarRequestOptions, this.Configuration, cancellationToken).ConfigureAwait(false);
+
+            if (this.ExceptionFactory != null)
+            {
+                Exception _exception = this.ExceptionFactory("PreviewProject", localVarResponse);
                 if (_exception != null) throw _exception;
             }
 
@@ -9518,6 +9931,161 @@ namespace Ainkrad.Client.Api
             if (this.ExceptionFactory != null)
             {
                 Exception _exception = this.ExceptionFactory("UpdateProject", localVarResponse);
+                if (_exception != null) throw _exception;
+            }
+
+            return localVarResponse;
+        }
+
+        /// <summary>
+        ///  
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id">The project&#39;s id</param>
+        /// <param name="repo">The repo&#39;s id</param>
+        /// <param name="updateProjectRepo"></param>
+        /// <returns>ProjectInfo</returns>
+        public ProjectInfo UpdateProjectRepo(string id, string repo, UpdateProjectRepo updateProjectRepo)
+        {
+            Ainkrad.Client.Client.ApiResponse<ProjectInfo> localVarResponse = UpdateProjectRepoWithHttpInfo(id, repo, updateProjectRepo);
+            return localVarResponse.Data;
+        }
+
+        /// <summary>
+        ///  
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id">The project&#39;s id</param>
+        /// <param name="repo">The repo&#39;s id</param>
+        /// <param name="updateProjectRepo"></param>
+        /// <returns>ApiResponse of ProjectInfo</returns>
+        public Ainkrad.Client.Client.ApiResponse<ProjectInfo> UpdateProjectRepoWithHttpInfo(string id, string repo, UpdateProjectRepo updateProjectRepo)
+        {
+            // verify the required parameter 'id' is set
+            if (id == null)
+                throw new Ainkrad.Client.Client.ApiException(400, "Missing required parameter 'id' when calling ProjectsApi->UpdateProjectRepo");
+
+            // verify the required parameter 'repo' is set
+            if (repo == null)
+                throw new Ainkrad.Client.Client.ApiException(400, "Missing required parameter 'repo' when calling ProjectsApi->UpdateProjectRepo");
+
+            // verify the required parameter 'updateProjectRepo' is set
+            if (updateProjectRepo == null)
+                throw new Ainkrad.Client.Client.ApiException(400, "Missing required parameter 'updateProjectRepo' when calling ProjectsApi->UpdateProjectRepo");
+
+            Ainkrad.Client.Client.RequestOptions localVarRequestOptions = new Ainkrad.Client.Client.RequestOptions();
+
+            string[] _contentTypes = new string[] {
+                "application/json"
+            };
+
+            // to determine the Accept header
+            string[] _accepts = new string[] {
+                "application/json"
+            };
+
+            var localVarContentType = Ainkrad.Client.Client.ClientUtils.SelectHeaderContentType(_contentTypes);
+            if (localVarContentType != null) localVarRequestOptions.HeaderParameters.Add("Content-Type", localVarContentType);
+
+            var localVarAccept = Ainkrad.Client.Client.ClientUtils.SelectHeaderAccept(_accepts);
+            if (localVarAccept != null) localVarRequestOptions.HeaderParameters.Add("Accept", localVarAccept);
+
+            localVarRequestOptions.PathParameters.Add("id", Ainkrad.Client.Client.ClientUtils.ParameterToString(id)); // path parameter
+            localVarRequestOptions.PathParameters.Add("repo", Ainkrad.Client.Client.ClientUtils.ParameterToString(repo)); // path parameter
+            localVarRequestOptions.Data = updateProjectRepo;
+
+            // authentication (device_signature) required
+            if (!string.IsNullOrEmpty(this.Configuration.GetApiKeyWithPrefix("Ainkrad-Signature")))
+            {
+                localVarRequestOptions.HeaderParameters.Add("Ainkrad-Signature", this.Configuration.GetApiKeyWithPrefix("Ainkrad-Signature"));
+            }
+
+            // make the HTTP request
+            var localVarResponse = this.Client.Patch<ProjectInfo>("/api/v1/projects/{id}/repos/{repo}", localVarRequestOptions, this.Configuration);
+
+            if (this.ExceptionFactory != null)
+            {
+                Exception _exception = this.ExceptionFactory("UpdateProjectRepo", localVarResponse);
+                if (_exception != null) throw _exception;
+            }
+
+            return localVarResponse;
+        }
+
+        /// <summary>
+        ///  
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id">The project&#39;s id</param>
+        /// <param name="repo">The repo&#39;s id</param>
+        /// <param name="updateProjectRepo"></param>
+        /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
+        /// <returns>Task of ProjectInfo</returns>
+        public async System.Threading.Tasks.Task<ProjectInfo> UpdateProjectRepoAsync(string id, string repo, UpdateProjectRepo updateProjectRepo, System.Threading.CancellationToken cancellationToken = default)
+        {
+            Ainkrad.Client.Client.ApiResponse<ProjectInfo> localVarResponse = await UpdateProjectRepoWithHttpInfoAsync(id, repo, updateProjectRepo, cancellationToken).ConfigureAwait(false);
+            return localVarResponse.Data;
+        }
+
+        /// <summary>
+        ///  
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id">The project&#39;s id</param>
+        /// <param name="repo">The repo&#39;s id</param>
+        /// <param name="updateProjectRepo"></param>
+        /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
+        /// <returns>Task of ApiResponse (ProjectInfo)</returns>
+        public async System.Threading.Tasks.Task<Ainkrad.Client.Client.ApiResponse<ProjectInfo>> UpdateProjectRepoWithHttpInfoAsync(string id, string repo, UpdateProjectRepo updateProjectRepo, System.Threading.CancellationToken cancellationToken = default)
+        {
+            // verify the required parameter 'id' is set
+            if (id == null)
+                throw new Ainkrad.Client.Client.ApiException(400, "Missing required parameter 'id' when calling ProjectsApi->UpdateProjectRepo");
+
+            // verify the required parameter 'repo' is set
+            if (repo == null)
+                throw new Ainkrad.Client.Client.ApiException(400, "Missing required parameter 'repo' when calling ProjectsApi->UpdateProjectRepo");
+
+            // verify the required parameter 'updateProjectRepo' is set
+            if (updateProjectRepo == null)
+                throw new Ainkrad.Client.Client.ApiException(400, "Missing required parameter 'updateProjectRepo' when calling ProjectsApi->UpdateProjectRepo");
+
+
+            Ainkrad.Client.Client.RequestOptions localVarRequestOptions = new Ainkrad.Client.Client.RequestOptions();
+
+            string[] _contentTypes = new string[] {
+                "application/json"
+            };
+
+            // to determine the Accept header
+            string[] _accepts = new string[] {
+                "application/json"
+            };
+
+
+            var localVarContentType = Ainkrad.Client.Client.ClientUtils.SelectHeaderContentType(_contentTypes);
+            if (localVarContentType != null) localVarRequestOptions.HeaderParameters.Add("Content-Type", localVarContentType);
+
+            var localVarAccept = Ainkrad.Client.Client.ClientUtils.SelectHeaderAccept(_accepts);
+            if (localVarAccept != null) localVarRequestOptions.HeaderParameters.Add("Accept", localVarAccept);
+
+            localVarRequestOptions.PathParameters.Add("id", Ainkrad.Client.Client.ClientUtils.ParameterToString(id)); // path parameter
+            localVarRequestOptions.PathParameters.Add("repo", Ainkrad.Client.Client.ClientUtils.ParameterToString(repo)); // path parameter
+            localVarRequestOptions.Data = updateProjectRepo;
+
+            // authentication (device_signature) required
+            if (!string.IsNullOrEmpty(this.Configuration.GetApiKeyWithPrefix("Ainkrad-Signature")))
+            {
+                localVarRequestOptions.HeaderParameters.Add("Ainkrad-Signature", this.Configuration.GetApiKeyWithPrefix("Ainkrad-Signature"));
+            }
+
+            // make the HTTP request
+
+            var localVarResponse = await this.AsynchronousClient.PatchAsync<ProjectInfo>("/api/v1/projects/{id}/repos/{repo}", localVarRequestOptions, this.Configuration, cancellationToken).ConfigureAwait(false);
+
+            if (this.ExceptionFactory != null)
+            {
+                Exception _exception = this.ExceptionFactory("UpdateProjectRepo", localVarResponse);
                 if (_exception != null) throw _exception;
             }
 

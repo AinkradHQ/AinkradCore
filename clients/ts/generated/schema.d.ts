@@ -1905,6 +1905,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{id}/preview/{path}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["previewProject"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{id}/repos": {
         parameters: {
             query?: never;
@@ -1934,7 +1950,7 @@ export interface paths {
         delete: operations["removeProjectRepo"];
         options?: never;
         head?: never;
-        patch?: never;
+        patch: operations["updateProjectRepo"];
         trace?: never;
     };
     "/api/v1/projects/{id}/repos/{repo}/fetch": {
@@ -2201,6 +2217,22 @@ export interface paths {
             cookie?: never;
         };
         get: operations["streamProjectRunLogs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/run/metrics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getProjectRunMetrics"];
         put?: never;
         post?: never;
         delete?: never;
@@ -5313,6 +5345,17 @@ export interface components {
             device: components["schemas"]["Named"];
             versions: components["schemas"]["Versions"];
         };
+        /** @description One CPU and memory reading of a service. */
+        MetricSample: {
+            at: components["schemas"]["Timestamp"];
+            /**
+             * Format: double
+             * @description Percent of one CPU; none while it was not running.
+             */
+            cpu_percent?: number | null;
+            /** Format: int64 */
+            memory_bytes: number;
+        };
         /** @description The Core's copy of a repo. */
         MirrorState: {
             /** @description Why the last fetch failed; the older head is kept. */
@@ -5605,6 +5648,8 @@ export interface components {
             provider: string;
         };
         NewProject: {
+            /** @description See `ProjectInfo.color` (API 110). */
+            color?: string | null;
             /** @description Default empty. */
             description?: string | null;
             /** @description One line, 1-100 characters. */
@@ -5961,6 +6006,12 @@ export interface components {
             mem_limit_mb: number;
         };
         ProjectInfo: {
+            /**
+             * @description The project's colour, one of the app's accents: `graphite`, `violet`, `blue`, `teal`,
+             *     `copper`, `sky`, `indigo`, `green`, `mint`, `rose`, `pink`, `orange`, `red`; none until one
+             *     is picked (API 110).
+             */
+            color?: string | null;
             /** Format: double */
             cpu_limit: number;
             created_at: components["schemas"]["Timestamp"];
@@ -6041,6 +6092,11 @@ export interface components {
             started_by: string;
             /** @description `starting`, `running`, `stopping`, `stopped` or `failed`. */
             state: string;
+            /**
+             * @description How far the start got (API 110), on `GET /run` only: for a `starting` run, a `running`
+             *     one (all `done`) and a failed start (its step `failed`); absent otherwise. See `RunStep`.
+             */
+            steps?: components["schemas"]["RunStep"][] | null;
             /**
              * @description Why it ended, or is ending: `user`, `idle`, `crash`, `runner_lost`, `replaced` or
              *     `start_failed`.
@@ -6449,6 +6505,21 @@ export interface components {
             next: number;
             run?: string | null;
         };
+        RunMetrics: {
+            /**
+             * Format: int64
+             * @description Seconds between the Core's own samples (60); a viewer's polls add some in between.
+             */
+            every_secs: number;
+            /** @description The live run these belong to; none (and no services) when the project is not running. */
+            run?: string | null;
+            /**
+             * Format: int64
+             * @description How many samples a service keeps (60).
+             */
+            samples_max: number;
+            services: components["schemas"]["ServiceHistory"][];
+        };
         RunServices: {
             /** @description The live run these belong to; none (and no services) when the project is not running. */
             run?: string | null;
@@ -6493,6 +6564,18 @@ export interface components {
              * @description 1 for the first save, then one more each time.
              */
             version: number;
+        };
+        /** @description One step of a run's start. */
+        RunStep: {
+            /** @description A few words: `2 of 3 services up`, the reason a step failed. */
+            detail?: string | null;
+            /**
+             * @description `pull` (the code, and images as they are needed), `build` (only when the spec builds an
+             *     image), `start` (the services, in order), `health` (every service running and healthy).
+             */
+            name: string;
+            /** @description `done`, `active`, `pending` or `failed`. */
+            state: string;
         };
         /** @description A variable, never its value. */
         RunVar: {
@@ -6856,6 +6939,11 @@ export interface components {
             };
             /** @description Absolute path inside the container; default is the image's. */
             workdir?: string | null;
+        };
+        ServiceHistory: {
+            name: string;
+            /** @description Oldest first, at most 60. */
+            samples: components["schemas"]["MetricSample"][];
         };
         ServiceInfo: {
             /**
@@ -7343,6 +7431,8 @@ export interface components {
         };
         /** @description What changes; an omitted field is kept. */
         UpdateProject: {
+            /** @description See `ProjectInfo.color`; an empty string clears it (API 110). */
+            color?: string | null;
             /**
              * Format: double
              * @description CPUs a run may use, 0.1 to 16.
@@ -7374,6 +7464,11 @@ export interface components {
             runner?: string | null;
             /** @description The link name (the slug); refused while the project runs or holds secrets. */
             slug?: string | null;
+        };
+        /** @description A repo's change (API 110). */
+        UpdateProjectRepo: {
+            /** @description The branch the repo follows (its `default_branch`): one the Core's copy holds. */
+            branch: string;
         };
         /** @description What changes; an omitted field is kept. */
         UpdateSecretGroup: {
@@ -8409,6 +8504,8 @@ export interface operations {
                 limit?: number;
                 /** @description Only the attempts of this run (its first attempt's id, `as_…`). */
                 run?: string;
+                /** @description Only the sessions started for this project (its id; API 110). An older Core ignores it. */
+                project?: number;
             };
             header?: never;
             path?: never;
@@ -8416,7 +8513,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Sessions, newest first (at most `limit`, 50 by default, 200 at most) */
+            /** @description Sessions, newest first (at most `limit`, 50 by default, 200 at most); with `project`, only that project's (API 110) */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -12275,6 +12372,36 @@ export interface operations {
             500: components["responses"]["InternalError"];
         };
     };
+    previewProject: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project's id */
+                id: string;
+                /** @description The path on the running app, slashes included (`/api/v1/projects/7/preview/` is its `/`); the query string is passed on as is */
+                path: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The running app's own answer, any status, for a private run too (API 110). The same verb works for POST, PUT, PATCH, DELETE, OPTIONS (scope `admin`) and HEAD. Every request, sub-resources included, is signed by the device as any other; the Mac app serves it from its own URL scheme. 409 `not_running` when the project has no running run (the words say why), 409 `no_preview` when no service has an exposed port, 404 for no such project; 503 `busy` (with `Retry-After`) past 6 requests in flight for the device or 8 for the project; 502 when the runner cannot be reached, 502 `redirect_refused` when the app redirects to another site, 504 when the app does not answer in 25 s. No WebSocket upgrade. GET and HEAD are `read` on purpose: viewing is the point. Answers: `Set-Cookie` paths and `Location` are moved under `/api/v1/projects/{id}/preview`; `Cache-Control: no-store`, `Cross-Origin-Resource-Policy: same-origin` and the CSP `sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads; frame-ancestors 'none'` are set (the Mac app drops that one CSP value under its own scheme); `Access-Control-*`, `Clear-Site-Data`, `Strict-Transport-Security`, `Alt-Svc` and `Service-Worker-Allowed` are dropped. The client sends no `Origin` or `Authorization` (both refused) and writes percent-escapes upper case */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
     addProjectRepo: {
         parameters: {
             query?: never;
@@ -12324,6 +12451,42 @@ export interface operations {
         requestBody?: never;
         responses: {
             /** @description Removed with its mirror row (audited as `project.repo_removed`); the project as it now is. 404 for no such project or repo; 409 `conflict` for an archived project or the primary while others remain */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectInfo"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    updateProjectRepo: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project's id */
+                id: string;
+                /** @description The repo's id */
+                repo: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateProjectRepo"];
+            };
+        };
+        responses: {
+            /** @description The repo follows `branch` (audited as `project.repo_branch_set`) and the Core fetched it again, so the copy's head is that branch's; the project as it now is (API 110). A branch the copy lacks is looked for with one fetch first. 400 for a bad name or a branch the remote does not have; 404 for no such project or repo; 409 `conflict` for an archived project, 409 `not_fetched` when the Core has no copy of the repo yet; 503 `mirrors_unavailable` when this Core keeps no repo copies */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -13086,6 +13249,39 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getProjectRunMetrics: {
+        parameters: {
+            query?: {
+                /** @description One of the project's live runs by id; default the newest live run. */
+                run?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The project's id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The CPU and memory history of each service of the live run (API 110): the last 60 samples, oldest first, one a minute from the Core and more while someone watches `run/services`; kept in memory, so it starts again after a Core restart. Empty when the project is not running. 404 for no such project */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunMetrics"];
+                };
             };
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];

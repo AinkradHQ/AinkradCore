@@ -472,9 +472,15 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `GET /api/v1/projects/{id}/code`.
     /// - Remark: Generated from `#/paths//api/v1/projects/{id}/code/get(getProjectCode)`.
     func getProjectCode(_ input: Operations.GetProjectCode.Input) async throws -> Operations.GetProjectCode.Output
+    /// - Remark: HTTP `GET /api/v1/projects/{id}/preview/{path}`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/{id}/preview/{path}/get(previewProject)`.
+    func previewProject(_ input: Operations.PreviewProject.Input) async throws -> Operations.PreviewProject.Output
     /// - Remark: HTTP `POST /api/v1/projects/{id}/repos`.
     /// - Remark: Generated from `#/paths//api/v1/projects/{id}/repos/post(addProjectRepo)`.
     func addProjectRepo(_ input: Operations.AddProjectRepo.Input) async throws -> Operations.AddProjectRepo.Output
+    /// - Remark: HTTP `PATCH /api/v1/projects/{id}/repos/{repo}`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/{id}/repos/{repo}/patch(updateProjectRepo)`.
+    func updateProjectRepo(_ input: Operations.UpdateProjectRepo.Input) async throws -> Operations.UpdateProjectRepo.Output
     /// - Remark: HTTP `DELETE /api/v1/projects/{id}/repos/{repo}`.
     /// - Remark: Generated from `#/paths//api/v1/projects/{id}/repos/{repo}/delete(removeProjectRepo)`.
     func removeProjectRepo(_ input: Operations.RemoveProjectRepo.Input) async throws -> Operations.RemoveProjectRepo.Output
@@ -544,6 +550,9 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `GET /api/v1/projects/{id}/run/logs/ws`.
     /// - Remark: Generated from `#/paths//api/v1/projects/{id}/run/logs/ws/get(streamProjectRunLogs)`.
     func streamProjectRunLogs(_ input: Operations.StreamProjectRunLogs.Input) async throws -> Operations.StreamProjectRunLogs.Output
+    /// - Remark: HTTP `GET /api/v1/projects/{id}/run/metrics`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/{id}/run/metrics/get(getProjectRunMetrics)`.
+    func getProjectRunMetrics(_ input: Operations.GetProjectRunMetrics.Input) async throws -> Operations.GetProjectRunMetrics.Output
     /// - Remark: HTTP `POST /api/v1/projects/{id}/run/restart`.
     /// - Remark: Generated from `#/paths//api/v1/projects/{id}/run/restart/post(restartProjectRun)`.
     func restartProjectRun(_ input: Operations.RestartProjectRun.Input) async throws -> Operations.RestartProjectRun.Output
@@ -2391,6 +2400,17 @@ extension APIProtocol {
             headers: headers
         ))
     }
+    /// - Remark: HTTP `GET /api/v1/projects/{id}/preview/{path}`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/{id}/preview/{path}/get(previewProject)`.
+    public func previewProject(
+        path: Operations.PreviewProject.Input.Path,
+        headers: Operations.PreviewProject.Input.Headers = .init()
+    ) async throws -> Operations.PreviewProject.Output {
+        try await previewProject(Operations.PreviewProject.Input(
+            path: path,
+            headers: headers
+        ))
+    }
     /// - Remark: HTTP `POST /api/v1/projects/{id}/repos`.
     /// - Remark: Generated from `#/paths//api/v1/projects/{id}/repos/post(addProjectRepo)`.
     public func addProjectRepo(
@@ -2399,6 +2419,19 @@ extension APIProtocol {
         body: Operations.AddProjectRepo.Input.Body
     ) async throws -> Operations.AddProjectRepo.Output {
         try await addProjectRepo(Operations.AddProjectRepo.Input(
+            path: path,
+            headers: headers,
+            body: body
+        ))
+    }
+    /// - Remark: HTTP `PATCH /api/v1/projects/{id}/repos/{repo}`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/{id}/repos/{repo}/patch(updateProjectRepo)`.
+    public func updateProjectRepo(
+        path: Operations.UpdateProjectRepo.Input.Path,
+        headers: Operations.UpdateProjectRepo.Input.Headers = .init(),
+        body: Operations.UpdateProjectRepo.Input.Body
+    ) async throws -> Operations.UpdateProjectRepo.Output {
+        try await updateProjectRepo(Operations.UpdateProjectRepo.Input(
             path: path,
             headers: headers,
             body: body
@@ -2670,6 +2703,19 @@ extension APIProtocol {
         headers: Operations.StreamProjectRunLogs.Input.Headers = .init()
     ) async throws -> Operations.StreamProjectRunLogs.Output {
         try await streamProjectRunLogs(Operations.StreamProjectRunLogs.Input(
+            path: path,
+            query: query,
+            headers: headers
+        ))
+    }
+    /// - Remark: HTTP `GET /api/v1/projects/{id}/run/metrics`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/{id}/run/metrics/get(getProjectRunMetrics)`.
+    public func getProjectRunMetrics(
+        path: Operations.GetProjectRunMetrics.Input.Path,
+        query: Operations.GetProjectRunMetrics.Input.Query = .init(),
+        headers: Operations.GetProjectRunMetrics.Input.Headers = .init()
+    ) async throws -> Operations.GetProjectRunMetrics.Output {
+        try await getProjectRunMetrics(Operations.GetProjectRunMetrics.Input(
             path: path,
             query: query,
             headers: headers

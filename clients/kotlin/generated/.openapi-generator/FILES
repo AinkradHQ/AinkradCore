@@ -181,6 +181,7 @@ src/main/kotlin/ainkrad/client/models/LoginCode.kt
 src/main/kotlin/ainkrad/client/models/LoginInputBody.kt
 src/main/kotlin/ainkrad/client/models/LoginScreenView.kt
 src/main/kotlin/ainkrad/client/models/Me.kt
+src/main/kotlin/ainkrad/client/models/MetricSample.kt
 src/main/kotlin/ainkrad/client/models/MirrorState.kt
 src/main/kotlin/ainkrad/client/models/ModelPrice.kt
 src/main/kotlin/ainkrad/client/models/Named.kt
@@ -256,11 +257,13 @@ src/main/kotlin/ainkrad/client/models/RunConfigStart.kt
 src/main/kotlin/ainkrad/client/models/RunEnvs.kt
 src/main/kotlin/ainkrad/client/models/RunLogLine.kt
 src/main/kotlin/ainkrad/client/models/RunLogs.kt
+src/main/kotlin/ainkrad/client/models/RunMetrics.kt
 src/main/kotlin/ainkrad/client/models/RunServices.kt
 src/main/kotlin/ainkrad/client/models/RunSpec.kt
 src/main/kotlin/ainkrad/client/models/RunSpecDraft.kt
 src/main/kotlin/ainkrad/client/models/RunSpecSummary.kt
 src/main/kotlin/ainkrad/client/models/RunSpecVersion.kt
+src/main/kotlin/ainkrad/client/models/RunStep.kt
 src/main/kotlin/ainkrad/client/models/RunVar.kt
 src/main/kotlin/ainkrad/client/models/RunVarValue.kt
 src/main/kotlin/ainkrad/client/models/Runner.kt
@@ -281,6 +284,7 @@ src/main/kotlin/ainkrad/client/models/SecretGroupInfo.kt
 src/main/kotlin/ainkrad/client/models/SecretInfo.kt
 src/main/kotlin/ainkrad/client/models/SecretsExport.kt
 src/main/kotlin/ainkrad/client/models/Service.kt
+src/main/kotlin/ainkrad/client/models/ServiceHistory.kt
 src/main/kotlin/ainkrad/client/models/ServiceInfo.kt
 src/main/kotlin/ainkrad/client/models/SessionGrant.kt
 src/main/kotlin/ainkrad/client/models/SessionLimits.kt
@@ -321,6 +325,7 @@ src/main/kotlin/ainkrad/client/models/UpdateCheck.kt
 src/main/kotlin/ainkrad/client/models/UpdateConnection.kt
 src/main/kotlin/ainkrad/client/models/UpdateEvent.kt
 src/main/kotlin/ainkrad/client/models/UpdateProject.kt
+src/main/kotlin/ainkrad/client/models/UpdateProjectRepo.kt
 src/main/kotlin/ainkrad/client/models/UpdateSecretGroup.kt
 src/main/kotlin/ainkrad/client/models/UpdateStatus.kt
 src/main/kotlin/ainkrad/client/models/UsageByCompany.kt

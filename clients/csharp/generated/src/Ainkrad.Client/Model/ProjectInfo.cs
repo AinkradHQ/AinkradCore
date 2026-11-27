@@ -40,6 +40,7 @@ namespace Ainkrad.Client.Model
         /// <summary>
         /// Initializes a new instance of the <see cref="ProjectInfo" /> class.
         /// </summary>
+        /// <param name="color">The project&#39;s colour, one of the app&#39;s accents: &#x60;graphite&#x60;, &#x60;violet&#x60;, &#x60;blue&#x60;, &#x60;teal&#x60;, &#x60;copper&#x60;, &#x60;sky&#x60;, &#x60;indigo&#x60;, &#x60;green&#x60;, &#x60;mint&#x60;, &#x60;rose&#x60;, &#x60;pink&#x60;, &#x60;orange&#x60;, &#x60;red&#x60;; none until one is picked (API 110)..</param>
         /// <param name="cpuLimit">cpuLimit (required).</param>
         /// <param name="createdAt">RFC 3339 UTC with exactly milliseconds, &#x60;2026-10-21T12:00:00.250Z&#x60;: one shape, so a client&#39;s date parser never meets a second one (E0.4). (required).</param>
         /// <param name="defaultEnvironment">The run environment a Run button uses by default; one of the project&#39;s..</param>
@@ -58,7 +59,7 @@ namespace Ainkrad.Client.Model
         /// <param name="source">&#x60;manual&#x60; or &#x60;github&#x60;. (required).</param>
         /// <param name="state">&#x60;active&#x60; or &#x60;archived&#x60;. (required).</param>
         /// <param name="updatedAt">RFC 3339 UTC with exactly milliseconds, &#x60;2026-10-21T12:00:00.250Z&#x60;: one shape, so a client&#39;s date parser never meets a second one (E0.4). (required).</param>
-        public ProjectInfo(double cpuLimit = default, DateTime createdAt = default, string defaultEnvironment = default, string description = default, bool expose = default, long fetchIntervalMinutes = default, long id = default, long idleMinutes = default, bool? idleNever = default, long memLimitMb = default, string name = default, List<ProjectRepo> repos = default, ProjectRoom room = default, string runner = default, string slug = default, string source = default, string state = default, DateTime updatedAt = default)
+        public ProjectInfo(string color = default, double cpuLimit = default, DateTime createdAt = default, string defaultEnvironment = default, string description = default, bool expose = default, long fetchIntervalMinutes = default, long id = default, long idleMinutes = default, bool? idleNever = default, long memLimitMb = default, string name = default, List<ProjectRepo> repos = default, ProjectRoom room = default, string runner = default, string slug = default, string source = default, string state = default, DateTime updatedAt = default)
         {
             this.CpuLimit = cpuLimit;
             this.CreatedAt = createdAt;
@@ -103,12 +104,20 @@ namespace Ainkrad.Client.Model
             }
             this.State = state;
             this.UpdatedAt = updatedAt;
+            this.Color = color;
             this.DefaultEnvironment = defaultEnvironment;
             this.FetchIntervalMinutes = fetchIntervalMinutes;
             this.IdleNever = idleNever;
             this.Room = room;
             this.Runner = runner;
         }
+
+        /// <summary>
+        /// The project&#39;s colour, one of the app&#39;s accents: &#x60;graphite&#x60;, &#x60;violet&#x60;, &#x60;blue&#x60;, &#x60;teal&#x60;, &#x60;copper&#x60;, &#x60;sky&#x60;, &#x60;indigo&#x60;, &#x60;green&#x60;, &#x60;mint&#x60;, &#x60;rose&#x60;, &#x60;pink&#x60;, &#x60;orange&#x60;, &#x60;red&#x60;; none until one is picked (API 110).
+        /// </summary>
+        /// <value>The project&#39;s colour, one of the app&#39;s accents: &#x60;graphite&#x60;, &#x60;violet&#x60;, &#x60;blue&#x60;, &#x60;teal&#x60;, &#x60;copper&#x60;, &#x60;sky&#x60;, &#x60;indigo&#x60;, &#x60;green&#x60;, &#x60;mint&#x60;, &#x60;rose&#x60;, &#x60;pink&#x60;, &#x60;orange&#x60;, &#x60;red&#x60;; none until one is picked (API 110).</value>
+        [DataMember(Name = "color", EmitDefaultValue = true)]
+        public string Color { get; set; }
 
         /// <summary>
         /// Gets or Sets CpuLimit
@@ -238,6 +247,7 @@ namespace Ainkrad.Client.Model
         {
             StringBuilder sb = new StringBuilder();
             sb.Append("class ProjectInfo {\n");
+            sb.Append("  Color: ").Append(Color).Append("\n");
             sb.Append("  CpuLimit: ").Append(CpuLimit).Append("\n");
             sb.Append("  CreatedAt: ").Append(CreatedAt).Append("\n");
             sb.Append("  DefaultEnvironment: ").Append(DefaultEnvironment).Append("\n");

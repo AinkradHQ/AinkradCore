@@ -25,6 +25,7 @@ import kotlinx.serialization.Contextual
  *
  * @param name One line, 1-100 characters.
  * @param slug See `ProjectInfo.slug`; it is the project's public host name.
+ * @param color See `ProjectInfo.color` (API 110).
  * @param description Default empty.
  * @param runner `auto` (default), `this_mac` or `home_server`.
  */
@@ -39,6 +40,10 @@ data class NewProject (
     /* See `ProjectInfo.slug`; it is the project's public host name. */
     @SerialName(value = "slug")
     val slug: kotlin.String,
+
+    /* See `ProjectInfo.color` (API 110). */
+    @SerialName(value = "color")
+    val color: kotlin.String? = null,
 
     /* Default empty. */
     @SerialName(value = "description")

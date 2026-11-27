@@ -246,8 +246,9 @@ namespace Ainkrad.Client.Api
         /// <param name="before">Sessions with an &#x60;index&#x60; below this; absent, from the newest. (optional)</param>
         /// <param name="limit"> (optional)</param>
         /// <param name="run">Only the attempts of this run (its first attempt&#39;s id, &#x60;as_…&#x60;). (optional)</param>
+        /// <param name="project">Only the sessions started for this project (its id; API 110). An older Core ignores it. (optional)</param>
         /// <returns>List&lt;AgentSession&gt;</returns>
-        List<AgentSession> ListAgentSessions(long? before = default, int? limit = default, string? run = default);
+        List<AgentSession> ListAgentSessions(long? before = default, int? limit = default, string? run = default, long? project = default);
 
         /// <summary>
         /// 
@@ -259,8 +260,9 @@ namespace Ainkrad.Client.Api
         /// <param name="before">Sessions with an &#x60;index&#x60; below this; absent, from the newest. (optional)</param>
         /// <param name="limit"> (optional)</param>
         /// <param name="run">Only the attempts of this run (its first attempt&#39;s id, &#x60;as_…&#x60;). (optional)</param>
+        /// <param name="project">Only the sessions started for this project (its id; API 110). An older Core ignores it. (optional)</param>
         /// <returns>ApiResponse of List&lt;AgentSession&gt;</returns>
-        ApiResponse<List<AgentSession>> ListAgentSessionsWithHttpInfo(long? before = default, int? limit = default, string? run = default);
+        ApiResponse<List<AgentSession>> ListAgentSessionsWithHttpInfo(long? before = default, int? limit = default, string? run = default, long? project = default);
         /// <summary>
         /// 
         /// </summary>
@@ -723,9 +725,10 @@ namespace Ainkrad.Client.Api
         /// <param name="before">Sessions with an &#x60;index&#x60; below this; absent, from the newest. (optional)</param>
         /// <param name="limit"> (optional)</param>
         /// <param name="run">Only the attempts of this run (its first attempt&#39;s id, &#x60;as_…&#x60;). (optional)</param>
+        /// <param name="project">Only the sessions started for this project (its id; API 110). An older Core ignores it. (optional)</param>
         /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
         /// <returns>Task of List&lt;AgentSession&gt;</returns>
-        System.Threading.Tasks.Task<List<AgentSession>> ListAgentSessionsAsync(long? before = default, int? limit = default, string? run = default, System.Threading.CancellationToken cancellationToken = default);
+        System.Threading.Tasks.Task<List<AgentSession>> ListAgentSessionsAsync(long? before = default, int? limit = default, string? run = default, long? project = default, System.Threading.CancellationToken cancellationToken = default);
 
         /// <summary>
         /// 
@@ -737,9 +740,10 @@ namespace Ainkrad.Client.Api
         /// <param name="before">Sessions with an &#x60;index&#x60; below this; absent, from the newest. (optional)</param>
         /// <param name="limit"> (optional)</param>
         /// <param name="run">Only the attempts of this run (its first attempt&#39;s id, &#x60;as_…&#x60;). (optional)</param>
+        /// <param name="project">Only the sessions started for this project (its id; API 110). An older Core ignores it. (optional)</param>
         /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
         /// <returns>Task of ApiResponse (List&lt;AgentSession&gt;)</returns>
-        System.Threading.Tasks.Task<ApiResponse<List<AgentSession>>> ListAgentSessionsWithHttpInfoAsync(long? before = default, int? limit = default, string? run = default, System.Threading.CancellationToken cancellationToken = default);
+        System.Threading.Tasks.Task<ApiResponse<List<AgentSession>>> ListAgentSessionsWithHttpInfoAsync(long? before = default, int? limit = default, string? run = default, long? project = default, System.Threading.CancellationToken cancellationToken = default);
         /// <summary>
         /// 
         /// </summary>
@@ -2654,10 +2658,11 @@ namespace Ainkrad.Client.Api
         /// <param name="before">Sessions with an &#x60;index&#x60; below this; absent, from the newest. (optional)</param>
         /// <param name="limit"> (optional)</param>
         /// <param name="run">Only the attempts of this run (its first attempt&#39;s id, &#x60;as_…&#x60;). (optional)</param>
+        /// <param name="project">Only the sessions started for this project (its id; API 110). An older Core ignores it. (optional)</param>
         /// <returns>List&lt;AgentSession&gt;</returns>
-        public List<AgentSession> ListAgentSessions(long? before = default, int? limit = default, string? run = default)
+        public List<AgentSession> ListAgentSessions(long? before = default, int? limit = default, string? run = default, long? project = default)
         {
-            Ainkrad.Client.Client.ApiResponse<List<AgentSession>> localVarResponse = ListAgentSessionsWithHttpInfo(before, limit, run);
+            Ainkrad.Client.Client.ApiResponse<List<AgentSession>> localVarResponse = ListAgentSessionsWithHttpInfo(before, limit, run, project);
             return localVarResponse.Data;
         }
 
@@ -2668,8 +2673,9 @@ namespace Ainkrad.Client.Api
         /// <param name="before">Sessions with an &#x60;index&#x60; below this; absent, from the newest. (optional)</param>
         /// <param name="limit"> (optional)</param>
         /// <param name="run">Only the attempts of this run (its first attempt&#39;s id, &#x60;as_…&#x60;). (optional)</param>
+        /// <param name="project">Only the sessions started for this project (its id; API 110). An older Core ignores it. (optional)</param>
         /// <returns>ApiResponse of List&lt;AgentSession&gt;</returns>
-        public Ainkrad.Client.Client.ApiResponse<List<AgentSession>> ListAgentSessionsWithHttpInfo(long? before = default, int? limit = default, string? run = default)
+        public Ainkrad.Client.Client.ApiResponse<List<AgentSession>> ListAgentSessionsWithHttpInfo(long? before = default, int? limit = default, string? run = default, long? project = default)
         {
             Ainkrad.Client.Client.RequestOptions localVarRequestOptions = new Ainkrad.Client.Client.RequestOptions();
 
@@ -2698,6 +2704,10 @@ namespace Ainkrad.Client.Api
             if (run != null)
             {
                 localVarRequestOptions.QueryParameters.Add(Ainkrad.Client.Client.ClientUtils.ParameterToMultiMap("", "run", run));
+            }
+            if (project != null)
+            {
+                localVarRequestOptions.QueryParameters.Add(Ainkrad.Client.Client.ClientUtils.ParameterToMultiMap("", "project", project));
             }
 
             // authentication (device_signature) required
@@ -2725,11 +2735,12 @@ namespace Ainkrad.Client.Api
         /// <param name="before">Sessions with an &#x60;index&#x60; below this; absent, from the newest. (optional)</param>
         /// <param name="limit"> (optional)</param>
         /// <param name="run">Only the attempts of this run (its first attempt&#39;s id, &#x60;as_…&#x60;). (optional)</param>
+        /// <param name="project">Only the sessions started for this project (its id; API 110). An older Core ignores it. (optional)</param>
         /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
         /// <returns>Task of List&lt;AgentSession&gt;</returns>
-        public async System.Threading.Tasks.Task<List<AgentSession>> ListAgentSessionsAsync(long? before = default, int? limit = default, string? run = default, System.Threading.CancellationToken cancellationToken = default)
+        public async System.Threading.Tasks.Task<List<AgentSession>> ListAgentSessionsAsync(long? before = default, int? limit = default, string? run = default, long? project = default, System.Threading.CancellationToken cancellationToken = default)
         {
-            Ainkrad.Client.Client.ApiResponse<List<AgentSession>> localVarResponse = await ListAgentSessionsWithHttpInfoAsync(before, limit, run, cancellationToken).ConfigureAwait(false);
+            Ainkrad.Client.Client.ApiResponse<List<AgentSession>> localVarResponse = await ListAgentSessionsWithHttpInfoAsync(before, limit, run, project, cancellationToken).ConfigureAwait(false);
             return localVarResponse.Data;
         }
 
@@ -2740,9 +2751,10 @@ namespace Ainkrad.Client.Api
         /// <param name="before">Sessions with an &#x60;index&#x60; below this; absent, from the newest. (optional)</param>
         /// <param name="limit"> (optional)</param>
         /// <param name="run">Only the attempts of this run (its first attempt&#39;s id, &#x60;as_…&#x60;). (optional)</param>
+        /// <param name="project">Only the sessions started for this project (its id; API 110). An older Core ignores it. (optional)</param>
         /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
         /// <returns>Task of ApiResponse (List&lt;AgentSession&gt;)</returns>
-        public async System.Threading.Tasks.Task<Ainkrad.Client.Client.ApiResponse<List<AgentSession>>> ListAgentSessionsWithHttpInfoAsync(long? before = default, int? limit = default, string? run = default, System.Threading.CancellationToken cancellationToken = default)
+        public async System.Threading.Tasks.Task<Ainkrad.Client.Client.ApiResponse<List<AgentSession>>> ListAgentSessionsWithHttpInfoAsync(long? before = default, int? limit = default, string? run = default, long? project = default, System.Threading.CancellationToken cancellationToken = default)
         {
 
             Ainkrad.Client.Client.RequestOptions localVarRequestOptions = new Ainkrad.Client.Client.RequestOptions();
@@ -2773,6 +2785,10 @@ namespace Ainkrad.Client.Api
             if (run != null)
             {
                 localVarRequestOptions.QueryParameters.Add(Ainkrad.Client.Client.ClientUtils.ParameterToMultiMap("", "run", run));
+            }
+            if (project != null)
+            {
+                localVarRequestOptions.QueryParameters.Add(Ainkrad.Client.Client.ClientUtils.ParameterToMultiMap("", "project", project));
             }
 
             // authentication (device_signature) required

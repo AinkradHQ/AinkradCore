@@ -40,11 +40,12 @@ namespace Ainkrad.Client.Model
         /// <summary>
         /// Initializes a new instance of the <see cref="NewProject" /> class.
         /// </summary>
+        /// <param name="color">See &#x60;ProjectInfo.color&#x60; (API 110)..</param>
         /// <param name="description">Default empty..</param>
         /// <param name="name">One line, 1-100 characters. (required).</param>
         /// <param name="runner">&#x60;auto&#x60; (default), &#x60;this_mac&#x60; or &#x60;home_server&#x60;..</param>
         /// <param name="slug">See &#x60;ProjectInfo.slug&#x60;; it is the project&#39;s public host name. (required).</param>
-        public NewProject(string description = default, string name = default, string runner = default, string slug = default)
+        public NewProject(string color = default, string description = default, string name = default, string runner = default, string slug = default)
         {
             // to ensure "name" is required (not null)
             if (name == null)
@@ -58,9 +59,17 @@ namespace Ainkrad.Client.Model
                 throw new ArgumentNullException("slug is a required property for NewProject and cannot be null");
             }
             this.Slug = slug;
+            this.Color = color;
             this.Description = description;
             this.Runner = runner;
         }
+
+        /// <summary>
+        /// See &#x60;ProjectInfo.color&#x60; (API 110).
+        /// </summary>
+        /// <value>See &#x60;ProjectInfo.color&#x60; (API 110).</value>
+        [DataMember(Name = "color", EmitDefaultValue = true)]
+        public string Color { get; set; }
 
         /// <summary>
         /// Default empty.
@@ -98,6 +107,7 @@ namespace Ainkrad.Client.Model
         {
             StringBuilder sb = new StringBuilder();
             sb.Append("class NewProject {\n");
+            sb.Append("  Color: ").Append(Color).Append("\n");
             sb.Append("  Description: ").Append(Description).Append("\n");
             sb.Append("  Name: ").Append(Name).Append("\n");
             sb.Append("  Runner: ").Append(Runner).Append("\n");

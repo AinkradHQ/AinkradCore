@@ -6869,6 +6869,39 @@ extension Components {
                 case versions
             }
         }
+        /// One CPU and memory reading of a service.
+        ///
+        /// - Remark: Generated from `#/components/schemas/MetricSample`.
+        public struct MetricSample: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/MetricSample/at`.
+            public var at: Components.Schemas.Timestamp
+            /// Percent of one CPU; none while it was not running.
+            ///
+            /// - Remark: Generated from `#/components/schemas/MetricSample/cpu_percent`.
+            public var cpuPercent: Swift.Double?
+            /// - Remark: Generated from `#/components/schemas/MetricSample/memory_bytes`.
+            public var memoryBytes: Swift.Int64
+            /// Creates a new `MetricSample`.
+            ///
+            /// - Parameters:
+            ///   - at:
+            ///   - cpuPercent: Percent of one CPU; none while it was not running.
+            ///   - memoryBytes:
+            public init(
+                at: Components.Schemas.Timestamp,
+                cpuPercent: Swift.Double? = nil,
+                memoryBytes: Swift.Int64
+            ) {
+                self.at = at
+                self.cpuPercent = cpuPercent
+                self.memoryBytes = memoryBytes
+            }
+            public enum CodingKeys: String, CodingKey {
+                case at
+                case cpuPercent = "cpu_percent"
+                case memoryBytes = "memory_bytes"
+            }
+        }
         /// The Core's copy of a repo.
         ///
         /// - Remark: Generated from `#/components/schemas/MirrorState`.
@@ -7802,6 +7835,10 @@ extension Components {
         }
         /// - Remark: Generated from `#/components/schemas/NewProject`.
         public struct NewProject: Codable, Hashable, Sendable {
+            /// See `ProjectInfo.color` (API 110).
+            ///
+            /// - Remark: Generated from `#/components/schemas/NewProject/color`.
+            public var color: Swift.String?
             /// Default empty.
             ///
             /// - Remark: Generated from `#/components/schemas/NewProject/description`.
@@ -7821,22 +7858,26 @@ extension Components {
             /// Creates a new `NewProject`.
             ///
             /// - Parameters:
+            ///   - color: See `ProjectInfo.color` (API 110).
             ///   - description: Default empty.
             ///   - name: One line, 1-100 characters.
             ///   - runner: `auto` (default), `this_mac` or `home_server`.
             ///   - slug: See `ProjectInfo.slug`; it is the project's public host name.
             public init(
+                color: Swift.String? = nil,
                 description: Swift.String? = nil,
                 name: Swift.String,
                 runner: Swift.String? = nil,
                 slug: Swift.String
             ) {
+                self.color = color
                 self.description = description
                 self.name = name
                 self.runner = runner
                 self.slug = slug
             }
             public enum CodingKeys: String, CodingKey {
+                case color
                 case description
                 case name
                 case runner
@@ -9048,6 +9089,12 @@ extension Components {
         }
         /// - Remark: Generated from `#/components/schemas/ProjectInfo`.
         public struct ProjectInfo: Codable, Hashable, Sendable {
+            /// The project's colour, one of the app's accents: `graphite`, `violet`, `blue`, `teal`,
+            /// `copper`, `sky`, `indigo`, `green`, `mint`, `rose`, `pink`, `orange`, `red`; none until one
+            /// is picked (API 110).
+            ///
+            /// - Remark: Generated from `#/components/schemas/ProjectInfo/color`.
+            public var color: Swift.String?
             /// - Remark: Generated from `#/components/schemas/ProjectInfo/cpu_limit`.
             public var cpuLimit: Swift.Double
             /// - Remark: Generated from `#/components/schemas/ProjectInfo/created_at`.
@@ -9107,6 +9154,7 @@ extension Components {
             /// Creates a new `ProjectInfo`.
             ///
             /// - Parameters:
+            ///   - color: The project's colour, one of the app's accents: `graphite`, `violet`, `blue`, `teal`,
             ///   - cpuLimit:
             ///   - createdAt:
             ///   - defaultEnvironment: The run environment a Run button uses by default; one of the project's.
@@ -9126,6 +9174,7 @@ extension Components {
             ///   - state: `active` or `archived`.
             ///   - updatedAt:
             public init(
+                color: Swift.String? = nil,
                 cpuLimit: Swift.Double,
                 createdAt: Components.Schemas.Timestamp,
                 defaultEnvironment: Swift.String? = nil,
@@ -9145,6 +9194,7 @@ extension Components {
                 state: Swift.String,
                 updatedAt: Components.Schemas.Timestamp
             ) {
+                self.color = color
                 self.cpuLimit = cpuLimit
                 self.createdAt = createdAt
                 self.defaultEnvironment = defaultEnvironment
@@ -9165,6 +9215,7 @@ extension Components {
                 self.updatedAt = updatedAt
             }
             public enum CodingKeys: String, CodingKey {
+                case color
                 case cpuLimit = "cpu_limit"
                 case createdAt = "created_at"
                 case defaultEnvironment = "default_environment"
@@ -9304,6 +9355,11 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/ProjectRun/state`.
             public var state: Swift.String
+            /// How far the start got (API 110), on `GET /run` only: for a `starting` run, a `running`
+            /// one (all `done`) and a failed start (its step `failed`); absent otherwise. See `RunStep`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ProjectRun/steps`.
+            public var steps: [Components.Schemas.RunStep]?
             /// Why it ended, or is ending: `user`, `idle`, `crash`, `runner_lost`, `replaced` or
             /// `start_failed`.
             ///
@@ -9326,6 +9382,7 @@ extension Components {
             ///   - startedAt:
             ///   - startedBy:
             ///   - state: `starting`, `running`, `stopping`, `stopped` or `failed`.
+            ///   - steps: How far the start got (API 110), on `GET /run` only: for a `starting` run, a `running`
             ///   - stopReason: Why it ended, or is ending: `user`, `idle`, `crash`, `runner_lost`, `replaced` or
             ///   - stoppedAt:
             public init(
@@ -9341,6 +9398,7 @@ extension Components {
                 startedAt: Components.Schemas.Timestamp,
                 startedBy: Swift.String,
                 state: Swift.String,
+                steps: [Components.Schemas.RunStep]? = nil,
                 stopReason: Swift.String? = nil,
                 stoppedAt: Components.Schemas.Timestamp? = nil
             ) {
@@ -9356,6 +9414,7 @@ extension Components {
                 self.startedAt = startedAt
                 self.startedBy = startedBy
                 self.state = state
+                self.steps = steps
                 self.stopReason = stopReason
                 self.stoppedAt = stoppedAt
             }
@@ -9372,6 +9431,7 @@ extension Components {
                 case startedAt = "started_at"
                 case startedBy = "started_by"
                 case state
+                case steps
                 case stopReason = "stop_reason"
                 case stoppedAt = "stopped_at"
             }
@@ -10608,6 +10668,47 @@ extension Components {
                 case run
             }
         }
+        /// - Remark: Generated from `#/components/schemas/RunMetrics`.
+        public struct RunMetrics: Codable, Hashable, Sendable {
+            /// Seconds between the Core's own samples (60); a viewer's polls add some in between.
+            ///
+            /// - Remark: Generated from `#/components/schemas/RunMetrics/every_secs`.
+            public var everySecs: Swift.Int64
+            /// The live run these belong to; none (and no services) when the project is not running.
+            ///
+            /// - Remark: Generated from `#/components/schemas/RunMetrics/run`.
+            public var run: Swift.String?
+            /// How many samples a service keeps (60).
+            ///
+            /// - Remark: Generated from `#/components/schemas/RunMetrics/samples_max`.
+            public var samplesMax: Swift.Int64
+            /// - Remark: Generated from `#/components/schemas/RunMetrics/services`.
+            public var services: [Components.Schemas.ServiceHistory]
+            /// Creates a new `RunMetrics`.
+            ///
+            /// - Parameters:
+            ///   - everySecs: Seconds between the Core's own samples (60); a viewer's polls add some in between.
+            ///   - run: The live run these belong to; none (and no services) when the project is not running.
+            ///   - samplesMax: How many samples a service keeps (60).
+            ///   - services:
+            public init(
+                everySecs: Swift.Int64,
+                run: Swift.String? = nil,
+                samplesMax: Swift.Int64,
+                services: [Components.Schemas.ServiceHistory]
+            ) {
+                self.everySecs = everySecs
+                self.run = run
+                self.samplesMax = samplesMax
+                self.services = services
+            }
+            public enum CodingKeys: String, CodingKey {
+                case everySecs = "every_secs"
+                case run
+                case samplesMax = "samples_max"
+                case services
+            }
+        }
         /// - Remark: Generated from `#/components/schemas/RunServices`.
         public struct RunServices: Codable, Hashable, Sendable {
             /// The live run these belong to; none (and no services) when the project is not running.
@@ -10797,6 +10898,44 @@ extension Components {
                 case origin
                 case spec
                 case version
+            }
+        }
+        /// One step of a run's start.
+        ///
+        /// - Remark: Generated from `#/components/schemas/RunStep`.
+        public struct RunStep: Codable, Hashable, Sendable {
+            /// A few words: `2 of 3 services up`, the reason a step failed.
+            ///
+            /// - Remark: Generated from `#/components/schemas/RunStep/detail`.
+            public var detail: Swift.String?
+            /// `pull` (the code, and images as they are needed), `build` (only when the spec builds an
+            /// image), `start` (the services, in order), `health` (every service running and healthy).
+            ///
+            /// - Remark: Generated from `#/components/schemas/RunStep/name`.
+            public var name: Swift.String
+            /// `done`, `active`, `pending` or `failed`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/RunStep/state`.
+            public var state: Swift.String
+            /// Creates a new `RunStep`.
+            ///
+            /// - Parameters:
+            ///   - detail: A few words: `2 of 3 services up`, the reason a step failed.
+            ///   - name: `pull` (the code, and images as they are needed), `build` (only when the spec builds an
+            ///   - state: `done`, `active`, `pending` or `failed`.
+            public init(
+                detail: Swift.String? = nil,
+                name: Swift.String,
+                state: Swift.String
+            ) {
+                self.detail = detail
+                self.name = name
+                self.state = state
+            }
+            public enum CodingKeys: String, CodingKey {
+                case detail
+                case name
+                case state
             }
         }
         /// A variable, never its value.
@@ -12039,6 +12178,31 @@ extension Components {
                 case repo
                 case volumes
                 case workdir
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/ServiceHistory`.
+        public struct ServiceHistory: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/ServiceHistory/name`.
+            public var name: Swift.String
+            /// Oldest first, at most 60.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ServiceHistory/samples`.
+            public var samples: [Components.Schemas.MetricSample]
+            /// Creates a new `ServiceHistory`.
+            ///
+            /// - Parameters:
+            ///   - name:
+            ///   - samples: Oldest first, at most 60.
+            public init(
+                name: Swift.String,
+                samples: [Components.Schemas.MetricSample]
+            ) {
+                self.name = name
+                self.samples = samples
+            }
+            public enum CodingKeys: String, CodingKey {
+                case name
+                case samples
             }
         }
         /// - Remark: Generated from `#/components/schemas/ServiceInfo`.
@@ -13951,6 +14115,10 @@ extension Components {
         ///
         /// - Remark: Generated from `#/components/schemas/UpdateProject`.
         public struct UpdateProject: Codable, Hashable, Sendable {
+            /// See `ProjectInfo.color`; an empty string clears it (API 110).
+            ///
+            /// - Remark: Generated from `#/components/schemas/UpdateProject/color`.
+            public var color: Swift.String?
             /// CPUs a run may use, 0.1 to 16.
             ///
             /// - Remark: Generated from `#/components/schemas/UpdateProject/cpu_limit`.
@@ -13992,6 +14160,7 @@ extension Components {
             /// Creates a new `UpdateProject`.
             ///
             /// - Parameters:
+            ///   - color: See `ProjectInfo.color`; an empty string clears it (API 110).
             ///   - cpuLimit: CPUs a run may use, 0.1 to 16.
             ///   - defaultEnvironment: One of the project's run environments; an empty string clears it.
             ///   - description:
@@ -14004,6 +14173,7 @@ extension Components {
             ///   - runner: Where it prefers to run: `auto`, `this_mac` or `home_server`.
             ///   - slug: The link name (the slug); refused while the project runs or holds secrets.
             public init(
+                color: Swift.String? = nil,
                 cpuLimit: Swift.Double? = nil,
                 defaultEnvironment: Swift.String? = nil,
                 description: Swift.String? = nil,
@@ -14016,6 +14186,7 @@ extension Components {
                 runner: Swift.String? = nil,
                 slug: Swift.String? = nil
             ) {
+                self.color = color
                 self.cpuLimit = cpuLimit
                 self.defaultEnvironment = defaultEnvironment
                 self.description = description
@@ -14029,6 +14200,7 @@ extension Components {
                 self.slug = slug
             }
             public enum CodingKeys: String, CodingKey {
+                case color
                 case cpuLimit = "cpu_limit"
                 case defaultEnvironment = "default_environment"
                 case description
@@ -14040,6 +14212,35 @@ extension Components {
                 case name
                 case runner
                 case slug
+            }
+        }
+        /// A repo's change (API 110).
+        ///
+        /// - Remark: Generated from `#/components/schemas/UpdateProjectRepo`.
+        public struct UpdateProjectRepo: Codable, Hashable, Sendable {
+            /// The branch the repo follows (its `default_branch`): one the Core's copy holds.
+            ///
+            /// - Remark: Generated from `#/components/schemas/UpdateProjectRepo/branch`.
+            public var branch: Swift.String
+            /// Creates a new `UpdateProjectRepo`.
+            ///
+            /// - Parameters:
+            ///   - branch: The branch the repo follows (its `default_branch`): one the Core's copy holds.
+            public init(branch: Swift.String) {
+                self.branch = branch
+            }
+            public enum CodingKeys: String, CodingKey {
+                case branch
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.branch = try container.decode(
+                    Swift.String.self,
+                    forKey: .branch
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "branch"
+                ])
             }
         }
         /// What changes; an omitted field is kept.

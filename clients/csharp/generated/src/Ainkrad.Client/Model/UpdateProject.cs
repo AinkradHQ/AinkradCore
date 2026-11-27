@@ -35,6 +35,7 @@ namespace Ainkrad.Client.Model
         /// <summary>
         /// Initializes a new instance of the <see cref="UpdateProject" /> class.
         /// </summary>
+        /// <param name="color">See &#x60;ProjectInfo.color&#x60;; an empty string clears it (API 110)..</param>
         /// <param name="cpuLimit">CPUs a run may use, 0.1 to 16..</param>
         /// <param name="defaultEnvironment">One of the project&#39;s run environments; an empty string clears it..</param>
         /// <param name="description">description.</param>
@@ -46,8 +47,9 @@ namespace Ainkrad.Client.Model
         /// <param name="name">name.</param>
         /// <param name="runner">Where it prefers to run: &#x60;auto&#x60;, &#x60;this_mac&#x60; or &#x60;home_server&#x60;..</param>
         /// <param name="slug">The link name (the slug); refused while the project runs or holds secrets..</param>
-        public UpdateProject(double? cpuLimit = default, string defaultEnvironment = default, string description = default, bool? expose = default, long? fetchIntervalMinutes = default, long? idleMinutes = default, bool? idleNever = default, long? memLimitMb = default, string name = default, string runner = default, string slug = default)
+        public UpdateProject(string color = default, double? cpuLimit = default, string defaultEnvironment = default, string description = default, bool? expose = default, long? fetchIntervalMinutes = default, long? idleMinutes = default, bool? idleNever = default, long? memLimitMb = default, string name = default, string runner = default, string slug = default)
         {
+            this.Color = color;
             this.CpuLimit = cpuLimit;
             this.DefaultEnvironment = defaultEnvironment;
             this.Description = description;
@@ -60,6 +62,13 @@ namespace Ainkrad.Client.Model
             this.Runner = runner;
             this.Slug = slug;
         }
+
+        /// <summary>
+        /// See &#x60;ProjectInfo.color&#x60;; an empty string clears it (API 110).
+        /// </summary>
+        /// <value>See &#x60;ProjectInfo.color&#x60;; an empty string clears it (API 110).</value>
+        [DataMember(Name = "color", EmitDefaultValue = true)]
+        public string Color { get; set; }
 
         /// <summary>
         /// CPUs a run may use, 0.1 to 16.
@@ -143,6 +152,7 @@ namespace Ainkrad.Client.Model
         {
             StringBuilder sb = new StringBuilder();
             sb.Append("class UpdateProject {\n");
+            sb.Append("  Color: ").Append(Color).Append("\n");
             sb.Append("  CpuLimit: ").Append(CpuLimit).Append("\n");
             sb.Append("  DefaultEnvironment: ").Append(DefaultEnvironment).Append("\n");
             sb.Append("  Description: ").Append(Description).Append("\n");
