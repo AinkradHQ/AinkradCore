@@ -120,3 +120,44 @@ fn doc_limits_and_ids() {
     let v = doc(&d);
     assert_eq!(v.len(), 3, "{v:?}"); // id, order (ends in 0), name
 }
+
+#[test]
+fn rotation_lock_effects_and_strokes() {
+    use NodeType::*;
+    assert!(ok(Rect, "rotation", json!(-45.5)));
+    assert!(ok(Text, "locked", json!(true)));
+    assert!(ok(Frame, "blur", json!(8)));
+    assert!(ok(Frame, "backdrop_blur", json!(20)));
+    assert!(ok(
+        Rect,
+        "shadow",
+        json!([{"x":0,"y":2,"blur":4,"color":"#00000040","inset":true}])
+    ));
+    // one stroke (the old shape) or a list, each with an alignment and dashes
+    assert!(ok(Rect, "stroke", json!({"color":"#ff0000","width":2})));
+    assert!(ok(
+        Ellipse,
+        "stroke",
+        json!([{"color":"#ff0000","width":2,"align":"outside","dash":[4,2]},{"color":{"token":"color.bg"},"align":"center"}])
+    ));
+    for (ty, k, v) in [
+        (Page, "rotation", json!(10)),
+        (Rect, "rotation", json!(361)),
+        (Rect, "rotation", json!("10")),
+        (Rect, "locked", json!(1)),
+        (Rect, "blur", json!(-1)),
+        (Rect, "backdrop_blur", json!(1001)),
+        (Rect, "shadow", json!([{"color":"#000000","inset":"yes"}])),
+        (Rect, "stroke", json!({"color":"#000000","align":"middle"})),
+        (Rect, "stroke", json!({"color":"#000000","dash":[-1]})),
+        (
+            Rect,
+            "stroke",
+            json!({"color":"#000000","dash":vec![1; 17]}),
+        ),
+        (Rect, "stroke", json!(vec![json!({"color":"#000000"}); 9])),
+        (Rect, "stroke", json!([{"color":"#000000","bogus":1}])),
+    ] {
+        assert!(!ok(ty, k, v.clone()), "{k} {v} on {ty:?} accepted");
+    }
+}

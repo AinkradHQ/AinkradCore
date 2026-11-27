@@ -193,8 +193,13 @@ fn shadows(p: &Map<String, Value>) -> Vec<String> {
         .flatten()
         .filter_map(|s| {
             let m = s.as_object()?;
+            let inset = if m.get("inset").and_then(Value::as_bool) == Some(true) {
+                "inset "
+            } else {
+                ""
+            };
             Some(format!(
-                "{} {} {} {} {}",
+                "{inset}{} {} {} {} {}",
                 px(fv(m, "x").unwrap_or(0.0)),
                 px(fv(m, "y").unwrap_or(0.0)),
                 px(fv(m, "blur").unwrap_or(0.0)),
@@ -300,12 +305,25 @@ fn paint_layers(o: &mut Out, sel: &str, n: &ResolvedNode) {
     o.at(sel, "background-position", join(&|x| x.pos));
 }
 
-/// The stroke is drawn inside the box (`draw.rs`): an inset spread.
+/// Strokes as box-shadow rings: inside (the default, `draw.rs`) is an inset spread, outside an outer one, centre
+/// half of each. ponytail: dashes are not exported (a ring cannot dash); a `border` per stroke would.
 fn stroke(n: &ResolvedNode) -> Option<String> {
-    let s = n.props.get("stroke")?.as_object()?;
-    let w = fv(s, "width").unwrap_or(1.0);
-    (w > 0.0).then_some(())?;
-    Some(format!("inset 0 0 0 {} {}", px(w), color(s.get("color")?)?))
+    let mut out = vec![];
+    for s in super::strokes(n.props.get("stroke")) {
+        let w = fv(s, "width").unwrap_or(1.0);
+        let Some(c) = s.get("color").and_then(color).filter(|_| w > 0.0) else {
+            continue;
+        };
+        match s.get("align").and_then(Value::as_str) {
+            Some("outside") => out.push(format!("0 0 0 {} {c}", px(w))),
+            Some("center") => {
+                out.push(format!("inset 0 0 0 {} {c}", px(w / 2.0)));
+                out.push(format!("0 0 0 {} {c}", px(w / 2.0)));
+            }
+            _ => out.push(format!("inset 0 0 0 {} {c}", px(w))),
+        }
+    }
+    (!out.is_empty()).then(|| out.join(","))
 }
 
 /// `(tint, rim)` of a material, as `draw.rs::material` picks them.
@@ -367,6 +385,16 @@ pub(super) fn node_decls(n: &ResolvedNode, i: usize, flow: Flow, cx: &Cx) -> Vec
     }
     if p.get("clip").and_then(Value::as_bool) == Some(true) && !n.children.is_empty() {
         o.put("overflow", "hidden");
+    }
+    // the renderer rotates about the centre, as CSS does by default; blur values are Skia's 2 sigma
+    if let Some(r) = fv(p, "rotation").filter(|r| *r != 0.0) {
+        o.put("transform", format!("rotate({}deg)", num(r)));
+    }
+    if let Some(b) = fv(p, "blur").filter(|b| *b > 0.0) {
+        o.put("filter", format!("blur({})", px(b / 2.0)));
+    }
+    if let Some(b) = fv(p, "backdrop_blur").filter(|b| *b > 0.0) {
+        o.put("backdrop-filter", format!("blur({})", px(b / 2.0)));
     }
     let mut outer = shadows(p);
     match n.ty {

@@ -90,7 +90,8 @@ pub(super) fn vector_parts(n: &ResolvedNode, i: usize, cx: &Cx) -> (String, Vec<
             _ => {}
         }
     }
-    if let Some(s) = n.props.get("stroke").and_then(Value::as_object) {
+    // ponytail: a vector exports its first stroke (centred, solid); the others are canvas-only for now
+    if let Some(s) = super::strokes(n.props.get("stroke")).first() {
         let w = fv(s, "width").unwrap_or(1.0);
         if let (true, Some(c)) = (w > 0.0, s.get("color").and_then(color)) {
             let sel = format!(".n{i}k");

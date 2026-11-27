@@ -2,10 +2,12 @@
 //! selection and input handling (V2-03: gestures in `interact`, their ops in `edits`, previews in `preview`), behind a small handle-based C ABI (`ffi`, header `include/DesignEngine.h`).
 //! Security model: see the top of `ffi.rs`.
 
+mod clip;
 mod codes;
 mod edits;
 mod export;
 pub mod ffi;
+mod ffi_tools;
 pub mod host;
 mod interact;
 mod pen;

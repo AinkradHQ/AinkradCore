@@ -339,6 +339,32 @@ impl Renderer {
         })
     }
 
+    /// A node as drawn, in world space: its box (unrotated, centred where it shows) and its rotation in degrees
+    /// (its own after its ancestors'). With no rotation the box is `node_rect`.
+    pub fn node_frame(&self, id: &str) -> Option<(Rect, f32)> {
+        self.boards.iter().find_map(|b| {
+            let n = &b.laid.nodes[*b.index.get(id)? as usize];
+            if n.mat.is_identity() {
+                return Some((n.rect.with_offset(b.origin), 0.0));
+            }
+            let c = n.mat.map_point((n.rect.center_x(), n.rect.center_y()));
+            let deg = n.mat.skew_y().atan2(n.mat.scale_x()).to_degrees();
+            let (w, h) = (n.rect.width(), n.rect.height());
+            Some((
+                Rect::from_xywh(c.x - w / 2.0, c.y - h / 2.0, w, h).with_offset(b.origin),
+                deg,
+            ))
+        })
+    }
+
+    /// The axis-aligned world box a node covers as drawn (rotation included).
+    pub fn node_bounds(&self, id: &str) -> Option<Rect> {
+        self.boards.iter().find_map(|b| {
+            let n = &b.laid.nodes[*b.index.get(id)? as usize];
+            Some(n.mat.map_rect(n.rect).0.with_offset(b.origin))
+        })
+    }
+
     /// The level of detail an artboard is drawn at under the current camera (live-blur budget included).
     pub fn lod_of(&self, id: &str) -> Option<Lod> {
         let i = self.boards.iter().position(|b| b.id == id)?;

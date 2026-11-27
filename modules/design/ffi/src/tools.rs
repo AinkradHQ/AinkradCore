@@ -366,6 +366,8 @@ impl Host {
                 handle: None,
                 ids: vec![id.clone()],
                 rects: vec![],
+                frames: vec![],
+                turn: None,
                 start: (0.0, 0.0),
                 copies: vec![],
                 dups: HashMap::new(),
