@@ -7115,10 +7115,11 @@ extension Components {
             public var policy: OpenAPIRuntime.OpenAPIObjectContainer?
             /// Start the session for a project (P3-02): the Core builds the workspace from the project's
             /// repos (the primary one first, each under its repo name when there are several), the
-            /// runner clones them from the Core's copies, and the project's Brain room, if it has one,
+            /// runner clones them from the Core's copies (a project with no repos gets no workspace: the
+            /// session works in its own empty folder, still tied to the project), and the project's Brain room, if it has one,
             /// is claimed (the room's model policy then applies, so a session with no chain is refused
             /// 403 `claim_refused`). Excludes `workspace` (400). 404 for no such project, 409
-            /// `project_archived`, 409 `project_has_no_repos`, 400 when the caller names a mirror in
+            /// `project_archived`, 400 when the caller names a mirror in
             /// `workspace`: only the Core sets one.
             ///
             /// - Remark: Generated from `#/components/schemas/NewAgentSession/project_id`.
@@ -7410,6 +7411,10 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/NewGithubProject/connection_id`.
             public var connectionId: Swift.Int64?
+            /// See `ProjectInfo.kind`; default `web`. 400 `bad_kind` for any other value (API 111).
+            ///
+            /// - Remark: Generated from `#/components/schemas/NewGithubProject/kind`.
+            public var kind: Swift.String?
             /// Default: the first repo's name.
             ///
             /// - Remark: Generated from `#/components/schemas/NewGithubProject/name`.
@@ -7427,22 +7432,26 @@ extension Components {
             ///
             /// - Parameters:
             ///   - connectionId: Default: the workspace's GitHub default.
+            ///   - kind: See `ProjectInfo.kind`; default `web`. 400 `bad_kind` for any other value (API 111).
             ///   - name: Default: the first repo's name.
             ///   - repos: 1-10 repos as `owner/name`; the first is primary.
             ///   - slug: Default: made from the name; a taken or reserved one gets `-2`, `-3`, ... An explicit slug
             public init(
                 connectionId: Swift.Int64? = nil,
+                kind: Swift.String? = nil,
                 name: Swift.String? = nil,
                 repos: [Swift.String],
                 slug: Swift.String? = nil
             ) {
                 self.connectionId = connectionId
+                self.kind = kind
                 self.name = name
                 self.repos = repos
                 self.slug = slug
             }
             public enum CodingKeys: String, CodingKey {
                 case connectionId = "connection_id"
+                case kind
                 case name
                 case repos
                 case slug
@@ -7843,6 +7852,10 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/NewProject/description`.
             public var description: Swift.String?
+            /// See `ProjectInfo.kind`; default `web`. 400 `bad_kind` for any other value (API 111).
+            ///
+            /// - Remark: Generated from `#/components/schemas/NewProject/kind`.
+            public var kind: Swift.String?
             /// One line, 1-100 characters.
             ///
             /// - Remark: Generated from `#/components/schemas/NewProject/name`.
@@ -7860,18 +7873,21 @@ extension Components {
             /// - Parameters:
             ///   - color: See `ProjectInfo.color` (API 110).
             ///   - description: Default empty.
+            ///   - kind: See `ProjectInfo.kind`; default `web`. 400 `bad_kind` for any other value (API 111).
             ///   - name: One line, 1-100 characters.
             ///   - runner: `auto` (default), `this_mac` or `home_server`.
             ///   - slug: See `ProjectInfo.slug`; it is the project's public host name.
             public init(
                 color: Swift.String? = nil,
                 description: Swift.String? = nil,
+                kind: Swift.String? = nil,
                 name: Swift.String,
                 runner: Swift.String? = nil,
                 slug: Swift.String
             ) {
                 self.color = color
                 self.description = description
+                self.kind = kind
                 self.name = name
                 self.runner = runner
                 self.slug = slug
@@ -7879,6 +7895,7 @@ extension Components {
             public enum CodingKeys: String, CodingKey {
                 case color
                 case description
+                case kind
                 case name
                 case runner
                 case slug
@@ -9121,6 +9138,11 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/ProjectInfo/idle_never`.
             public var idleNever: Swift.Bool?
+            /// What it is: `web` (default), `app` (desktop or mobile), `infra` (infrastructure, an OS) or
+            /// `other` (not software) (API 111).
+            ///
+            /// - Remark: Generated from `#/components/schemas/ProjectInfo/kind`.
+            public var kind: Swift.String
             /// - Remark: Generated from `#/components/schemas/ProjectInfo/mem_limit_mb`.
             public var memLimitMb: Swift.Int64
             /// - Remark: Generated from `#/components/schemas/ProjectInfo/name`.
@@ -9164,6 +9186,7 @@ extension Components {
             ///   - id:
             ///   - idleMinutes:
             ///   - idleNever: The idle stop is off: the run keeps going while nobody visits.
+            ///   - kind: What it is: `web` (default), `app` (desktop or mobile), `infra` (infrastructure, an OS) or
             ///   - memLimitMb:
             ///   - name:
             ///   - repos: The primary repo first, then by name.
@@ -9184,6 +9207,7 @@ extension Components {
                 id: Swift.Int64,
                 idleMinutes: Swift.Int64,
                 idleNever: Swift.Bool? = nil,
+                kind: Swift.String,
                 memLimitMb: Swift.Int64,
                 name: Swift.String,
                 repos: [Components.Schemas.ProjectRepo],
@@ -9204,6 +9228,7 @@ extension Components {
                 self.id = id
                 self.idleMinutes = idleMinutes
                 self.idleNever = idleNever
+                self.kind = kind
                 self.memLimitMb = memLimitMb
                 self.name = name
                 self.repos = repos
@@ -9225,6 +9250,7 @@ extension Components {
                 case id
                 case idleMinutes = "idle_minutes"
                 case idleNever = "idle_never"
+                case kind
                 case memLimitMb = "mem_limit_mb"
                 case name
                 case repos
@@ -14143,6 +14169,10 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/UpdateProject/idle_never`.
             public var idleNever: Swift.Bool?
+            /// See `ProjectInfo.kind`; 400 `bad_kind` for any other value (API 111).
+            ///
+            /// - Remark: Generated from `#/components/schemas/UpdateProject/kind`.
+            public var kind: Swift.String?
             /// Memory a run may use, 64 to 32768 MB.
             ///
             /// - Remark: Generated from `#/components/schemas/UpdateProject/mem_limit_mb`.
@@ -14168,6 +14198,7 @@ extension Components {
             ///   - fetchIntervalMinutes: Minutes between automatic fetches: 10, 15, 60, or 0 for only when asked.
             ///   - idleMinutes: Idle stop, 5 to 1440 minutes.
             ///   - idleNever: Turn the idle stop off (true) or back on (false).
+            ///   - kind: See `ProjectInfo.kind`; 400 `bad_kind` for any other value (API 111).
             ///   - memLimitMb: Memory a run may use, 64 to 32768 MB.
             ///   - name:
             ///   - runner: Where it prefers to run: `auto`, `this_mac` or `home_server`.
@@ -14181,6 +14212,7 @@ extension Components {
                 fetchIntervalMinutes: Swift.Int64? = nil,
                 idleMinutes: Swift.Int64? = nil,
                 idleNever: Swift.Bool? = nil,
+                kind: Swift.String? = nil,
                 memLimitMb: Swift.Int64? = nil,
                 name: Swift.String? = nil,
                 runner: Swift.String? = nil,
@@ -14194,6 +14226,7 @@ extension Components {
                 self.fetchIntervalMinutes = fetchIntervalMinutes
                 self.idleMinutes = idleMinutes
                 self.idleNever = idleNever
+                self.kind = kind
                 self.memLimitMb = memLimitMb
                 self.name = name
                 self.runner = runner
@@ -14208,6 +14241,7 @@ extension Components {
                 case fetchIntervalMinutes = "fetch_interval_minutes"
                 case idleMinutes = "idle_minutes"
                 case idleNever = "idle_never"
+                case kind
                 case memLimitMb = "mem_limit_mb"
                 case name
                 case runner

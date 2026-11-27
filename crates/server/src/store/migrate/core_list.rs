@@ -413,6 +413,12 @@ pub static CORE_MIGRATIONS: &[Migration] = &[
         up: include_str!("../../../migrations/0068_project_color.up.sql"),
         down: include_str!("../../../migrations/0068_project_color.down.sql"),
     },
+    Migration {
+        version: 69,
+        name: "project_kind",
+        up: include_str!("../../../migrations/0069_project_kind.up.sql"),
+        down: include_str!("../../../migrations/0069_project_kind.down.sql"),
+    },
 ];
 
 #[cfg(test)]

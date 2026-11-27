@@ -25,6 +25,7 @@ import kotlinx.serialization.Contextual
  *
  * @param repos 1-10 repos as `owner/name`; the first is primary.
  * @param connectionId Default: the workspace's GitHub default.
+ * @param kind See `ProjectInfo.kind`; default `web`. 400 `bad_kind` for any other value (API 111).
  * @param name Default: the first repo's name.
  * @param slug Default: made from the name; a taken or reserved one gets `-2`, `-3`, ... An explicit slug that is taken is 409 `conflict`.
  */
@@ -39,6 +40,10 @@ data class NewGithubProject (
     /* Default: the workspace's GitHub default. */
     @SerialName(value = "connection_id")
     val connectionId: kotlin.Long? = null,
+
+    /* See `ProjectInfo.kind`; default `web`. 400 `bad_kind` for any other value (API 111). */
+    @SerialName(value = "kind")
+    val kind: kotlin.String? = null,
 
     /* Default: the first repo's name. */
     @SerialName(value = "name")

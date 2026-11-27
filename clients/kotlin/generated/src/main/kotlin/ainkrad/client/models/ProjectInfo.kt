@@ -31,6 +31,7 @@ import kotlinx.serialization.Contextual
  * @param expose Whether the running project gets a public link.
  * @param id 
  * @param idleMinutes 
+ * @param kind What it is: `web` (default), `app` (desktop or mobile), `infra` (infrastructure, an OS) or `other` (not software) (API 111).
  * @param memLimitMb 
  * @param name 
  * @param repos The primary repo first, then by name.
@@ -68,6 +69,10 @@ data class ProjectInfo (
 
     @SerialName(value = "idle_minutes")
     val idleMinutes: kotlin.Long,
+
+    /* What it is: `web` (default), `app` (desktop or mobile), `infra` (infrastructure, an OS) or `other` (not software) (API 111). */
+    @SerialName(value = "kind")
+    val kind: kotlin.String,
 
     @SerialName(value = "mem_limit_mb")
     val memLimitMb: kotlin.Long,

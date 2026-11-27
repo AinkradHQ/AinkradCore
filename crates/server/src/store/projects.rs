@@ -37,6 +37,9 @@ pub const COLORS: [&str; 13] = [
     "pink", "orange", "red",
 ];
 
+/// What a project is: web (default), an app (desktop or mobile), infrastructure, or not software.
+pub const KINDS: [&str; 4] = ["web", "app", "infra", "other"];
+
 /// The values of a project's runner preference.
 pub const RUNNERS: [&str; 3] = ["auto", "this_mac", "home_server"];
 
@@ -63,6 +66,8 @@ pub struct Project {
     pub default_environment: Option<String>,
     /// One of [`COLORS`], when picked.
     pub color: Option<String>,
+    /// One of [`KINDS`].
+    pub kind: String,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -98,6 +103,14 @@ fn refused<T>(code: &'static str, message: &str) -> Result<T, Error> {
     })
 }
 
+/// `bad_kind` unless `kind` is one of [`KINDS`].
+pub fn kind_ok(kind: &str) -> Result<(), Error> {
+    match KINDS.contains(&kind) {
+        true => Ok(()),
+        false => refused("bad_kind", "a kind is web, app, infra or other"),
+    }
+}
+
 /// A DNS label, 2-40 characters, not reserved: what the table's CHECK allows, plus the list.
 pub fn slug_problem(slug: &str) -> Option<&'static str> {
     let b = slug.as_bytes();
@@ -117,7 +130,7 @@ pub fn slug_problem(slug: &str) -> Option<&'static str> {
 
 const SELECT: &str = "SELECT id, slug, name, description, state, source, secret_group, expose, \
     idle_minutes, idle_never, cpu_limit, mem_limit_mb, runner_pref, fetch_interval_minutes, \
-    default_environment, color, created_at, updated_at FROM core_projects";
+    default_environment, color, kind, created_at, updated_at FROM core_projects";
 
 fn project(r: SqliteRow) -> Result<Project, sqlx::Error> {
     Ok(Project {
@@ -137,6 +150,7 @@ fn project(r: SqliteRow) -> Result<Project, sqlx::Error> {
         fetch_interval_minutes: r.try_get("fetch_interval_minutes")?,
         default_environment: r.try_get("default_environment")?,
         color: r.try_get("color")?,
+        kind: r.try_get("kind")?,
         created_at: r.try_get("created_at")?,
         updated_at: r.try_get("updated_at")?,
     })
@@ -331,6 +345,8 @@ pub struct Change<'a> {
     pub default_environment: Option<&'a str>,
     /// One of [`COLORS`]; an empty string clears it.
     pub color: Option<&'a str>,
+    /// One of [`KINDS`].
+    pub kind: Option<&'a str>,
 }
 
 /// Changes name, description and/or public exposure (`None` keeps it). An archived project is
@@ -427,6 +443,8 @@ pub async fn change(
         }
         None => old.color.clone(),
     };
+    let kind = c.kind.unwrap_or(&old.kind);
+    kind_ok(kind)?;
     let never = c.idle_never.unwrap_or(old.idle_never);
     limits_ok(idle, cpu, mem)?;
     let slug = c.slug.unwrap_or(&old.slug);
@@ -455,7 +473,7 @@ pub async fn change(
     sqlx::query(
         "UPDATE core_projects SET slug = ?, name = ?, description = ?, expose = ?, \
          idle_minutes = ?, idle_never = ?, cpu_limit = ?, mem_limit_mb = ?, runner_pref = ?, \
-         fetch_interval_minutes = ?, default_environment = ?, color = ?, updated_at = ? WHERE id = ?",
+         fetch_interval_minutes = ?, default_environment = ?, color = ?, kind = ?, updated_at = ? WHERE id = ?",
     )
     .bind(slug)
     .bind(name)
@@ -469,13 +487,14 @@ pub async fn change(
     .bind(fetch)
     .bind(&env)
     .bind(&color)
+    .bind(kind)
     .bind(who.now)
     .bind(id)
     .execute(&mut *tx)
     .await?;
     let details = json!({"name": name, "slug": slug, "expose": expose, "idle_minutes": idle,
         "idle_never": never, "cpu_limit": cpu, "mem_limit_mb": mem, "runner": runner,
-        "fetch_interval_minutes": fetch, "default_environment": env, "color": color, "by_device": who.by_device});
+        "fetch_interval_minutes": fetch, "default_environment": env, "color": color, "kind": kind, "by_device": who.by_device});
     record(&mut tx, who.actor, "project.updated", id, details, true).await?;
     let p = get(&mut tx, id).await?;
     tx.commit().await?;

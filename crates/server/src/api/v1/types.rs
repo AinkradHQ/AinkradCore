@@ -413,7 +413,10 @@
 ///    preview or its public link never does). Preview answers: cookie paths and `Location` under
 ///    the preview, `Cache-Control: no-store`, a sandbox CSP, `Cross-Origin-Resource-Policy:
 ///    same-origin`. An older Core 404s the routes and ignores the fields and the query.
-pub const API_MINOR: u32 = 110;
+/// 111: a project's kind (2026-11-27). `kind` on `ProjectInfo`, `NewProject`, `NewGithubProject` and
+///    `UpdateProject`: `web` (default, every existing project), `app`, `infra` or `other`; any other value is
+///    400 `bad_kind`. An older Core ignores the field.
+pub const API_MINOR: u32 = 111;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

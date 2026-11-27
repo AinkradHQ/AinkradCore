@@ -165,7 +165,8 @@ async fn a_fresh_database_records_the_baseline_and_a_second_run_is_a_no_op() {
             (65, "account_details"),
             (66, "terminal_account_uses"),
             (67, "lent_logins"),
-            (68, "project_color")
+            (68, "project_color"),
+            (69, "project_kind")
         ]
     );
     let sum: Vec<u8> =
