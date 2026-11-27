@@ -1735,11 +1735,13 @@
           "project.created",
           "project.defaults_changed",
           "project.repo_added",
+          "project.repo_branch_set",
           "project.repo_primary_set",
           "project.repo_removed",
           "project.run_gave_up",
           "project.run_started",
           "project.run_stopped",
+          "project.service_crashed",
           "project.spec_saved",
           "project.unarchived",
           "project.updated",
@@ -3508,6 +3510,7 @@
           "project.run_gave_up",
           "project.run_started",
           "project.run_stopped",
+          "project.service_crashed",
           "project.spec_saved",
           "project.updated",
           "runner.connected",
@@ -3554,6 +3557,7 @@
           "project.run_gave_up": "read",
           "project.run_started": "read",
           "project.run_stopped": "read",
+          "project.service_crashed": "read",
           "project.spec_saved": "read",
           "project.updated": "read",
           "runner.connected": "read",
@@ -5120,6 +5124,31 @@
         ],
         "type": "object"
       },
+      "MetricSample": {
+        "description": "One CPU and memory reading of a service.",
+        "properties": {
+          "at": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "cpu_percent": {
+            "description": "Percent of one CPU; none while it was not running.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "memory_bytes": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "at",
+          "memory_bytes"
+        ],
+        "type": "object"
+      },
       "MirrorState": {
         "description": "The Core's copy of a repo.",
         "properties": {
@@ -5748,6 +5777,13 @@
       },
       "NewProject": {
         "properties": {
+          "color": {
+            "description": "See `ProjectInfo.color` (API 110).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "description": {
             "description": "Default empty.",
             "type": [
@@ -6670,6 +6706,13 @@
       },
       "ProjectInfo": {
         "properties": {
+          "color": {
+            "description": "The project's colour, one of the app's accents: `graphite`, `violet`, `blue`, `teal`,\n`copper`, `sky`, `indigo`, `green`, `mint`, `rose`, `pink`, `orange`, `red`; none until one\nis picked (API 110).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "cpu_limit": {
             "format": "double",
             "type": "number"
@@ -6874,6 +6917,16 @@
           "state": {
             "description": "`starting`, `running`, `stopping`, `stopped` or `failed`.",
             "type": "string"
+          },
+          "steps": {
+            "description": "How far the start got (API 110), on `GET /run` only: for a `starting` run, a `running`\none (all `done`) and a failed start (its step `failed`); absent otherwise. See `RunStep`.",
+            "items": {
+              "$ref": "#/components/schemas/RunStep"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
           },
           "stop_reason": {
             "description": "Why it ended, or is ending: `user`, `idle`, `crash`, `runner_lost`, `replaced` or\n`start_failed`.",
@@ -7764,6 +7817,39 @@
         ],
         "type": "object"
       },
+      "RunMetrics": {
+        "properties": {
+          "every_secs": {
+            "description": "Seconds between the Core's own samples (60); a viewer's polls add some in between.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "run": {
+            "description": "The live run these belong to; none (and no services) when the project is not running.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "samples_max": {
+            "description": "How many samples a service keeps (60).",
+            "format": "int64",
+            "type": "integer"
+          },
+          "services": {
+            "items": {
+              "$ref": "#/components/schemas/ServiceHistory"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "samples_max",
+          "every_secs",
+          "services"
+        ],
+        "type": "object"
+      },
       "RunServices": {
         "properties": {
           "run": {
@@ -7886,6 +7972,31 @@
           "origin",
           "created_by",
           "created_at"
+        ],
+        "type": "object"
+      },
+      "RunStep": {
+        "description": "One step of a run's start.",
+        "properties": {
+          "detail": {
+            "description": "A few words: `2 of 3 services up`, the reason a step failed.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "description": "`pull` (the code, and images as they are needed), `build` (only when the spec builds an\nimage), `start` (the services, in order), `health` (every service running and healthy).",
+            "type": "string"
+          },
+          "state": {
+            "description": "`done`, `active`, `pending` or `failed`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "state"
         ],
         "type": "object"
       },
@@ -8801,6 +8912,25 @@
             ]
           }
         },
+        "type": "object"
+      },
+      "ServiceHistory": {
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "samples": {
+            "description": "Oldest first, at most 60.",
+            "items": {
+              "$ref": "#/components/schemas/MetricSample"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "samples"
+        ],
         "type": "object"
       },
       "ServiceInfo": {
@@ -10037,6 +10167,13 @@
       "UpdateProject": {
         "description": "What changes; an omitted field is kept.",
         "properties": {
+          "color": {
+            "description": "See `ProjectInfo.color`; an empty string clears it (API 110).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "cpu_limit": {
             "description": "CPUs a run may use, 0.1 to 16.",
             "format": "double",
@@ -10116,6 +10253,20 @@
             ]
           }
         },
+        "type": "object"
+      },
+      "UpdateProjectRepo": {
+        "additionalProperties": false,
+        "description": "A repo's change (API 110).",
+        "properties": {
+          "branch": {
+            "description": "The branch the repo follows (its `default_branch`): one the Core's copy holds.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "branch"
+        ],
         "type": "object"
       },
       "UpdateSecretGroup": {
@@ -10393,7 +10544,7 @@
       "name": ""
     },
     "title": "Ainkrad Core",
-    "version": "1.109.0"
+    "version": "1.110.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -11938,6 +12089,16 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "Only the sessions started for this project (its id; API 110). An older Core ignores it.",
+            "in": "query",
+            "name": "project",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
           }
         ],
         "responses": {
@@ -11952,7 +12113,7 @@
                 }
               }
             },
-            "description": "Sessions, newest first (at most `limit`, 50 by default, 200 at most)"
+            "description": "Sessions, newest first (at most `limit`, 50 by default, 200 at most); with `project`, only that project's (API 110)"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
@@ -18854,6 +19015,61 @@
         "x-ainkrad-scope": "read"
       }
     },
+    "/api/v1/projects/{id}/preview/{path}": {
+      "get": {
+        "operationId": "previewProject",
+        "parameters": [
+          {
+            "description": "The project's id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The path on the running app, slashes included (`/api/v1/projects/7/preview/` is its `/`); the query string is passed on as is",
+            "in": "path",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The running app's own answer, any status, for a private run too (API 110). The same verb works for POST, PUT, PATCH, DELETE, OPTIONS (scope `admin`) and HEAD. Every request, sub-resources included, is signed by the device as any other; the Mac app serves it from its own URL scheme. 409 `not_running` when the project has no running run (the words say why), 409 `no_preview` when no service has an exposed port, 404 for no such project; 503 `busy` (with `Retry-After`) past 6 requests in flight for the device or 8 for the project or the runner (`busy`); 502 `runner_unreachable` when the runner cannot be reached, 504 `timeout`; 502 `redirect_refused` when the app redirects to another site (504 after 25 s with no answer). No WebSocket upgrade. GET and HEAD are `read` on purpose: viewing is the point. Answers: `Set-Cookie` paths and `Location` are moved under `/api/v1/projects/{id}/preview`; `Cache-Control: no-store`, `Cross-Origin-Resource-Policy: same-origin` and the CSP `sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads; frame-ancestors 'none'` are set (the Mac app drops that one CSP value under its own scheme); `Access-Control-*`, `Clear-Site-Data`, `Strict-Transport-Security`, `Alt-Svc` and `Service-Worker-Allowed` are dropped. The client sends no `Origin` or `Authorization` (both refused) and writes percent-escapes upper case"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "projects"
+        ],
+        "x-ainkrad-scope": "read"
+      }
+    },
     "/api/v1/projects/{id}/repos": {
       "post": {
         "operationId": "addProjectRepo",
@@ -18950,6 +19166,76 @@
               }
             },
             "description": "Removed with its mirror row (audited as `project.repo_removed`); the project as it now is. 404 for no such project or repo; 409 `conflict` for an archived project or the primary while others remain"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "projects"
+        ],
+        "x-ainkrad-scope": "admin"
+      },
+      "patch": {
+        "operationId": "updateProjectRepo",
+        "parameters": [
+          {
+            "description": "The project's id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The repo's id",
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateProjectRepo"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectInfo"
+                }
+              }
+            },
+            "description": "The repo follows `branch` (audited as `project.repo_branch_set`) and the Core fetched it again, so the copy's head is that branch's; the project as it now is (API 110). A branch the copy lacks is looked for with one fetch first. 400 for a bad name or a branch the remote does not have; 404 for no such project or repo; 409 `conflict` for an archived project, 409 `not_fetched` when the Core has no copy of the repo yet; 503 `mirrors_unavailable` when this Core keeps no repo copies"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
@@ -20489,6 +20775,68 @@
           "projects"
         ],
         "x-ainkrad-scope": "admin"
+      }
+    },
+    "/api/v1/projects/{id}/run/metrics": {
+      "get": {
+        "operationId": "getProjectRunMetrics",
+        "parameters": [
+          {
+            "description": "The project's id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "One of the project's live runs by id; default the newest live run.",
+            "in": "query",
+            "name": "run",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunMetrics"
+                }
+              }
+            },
+            "description": "The CPU and memory history of each service of the live run (API 110): the last 60 samples, oldest first, one a minute from the Core and more while someone watches `run/services`; kept in memory, so it starts again after a Core restart. Empty when the project is not running. 404 for no such project"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "projects"
+        ],
+        "x-ainkrad-scope": "read"
       }
     },
     "/api/v1/projects/{id}/run/restart": {

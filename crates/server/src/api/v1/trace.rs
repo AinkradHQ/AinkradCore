@@ -103,6 +103,11 @@ impl IntoResponse for ApiError {
         };
         let mut response = (self.status, Json(body)).into_response();
         response.extensions_mut().insert(refused);
+        // Says the Core itself answered (API 110): a previewed or public project's answer never
+        // carries it, since both proxies drop every `Ainkrad-*` header a project sends.
+        response
+            .headers_mut()
+            .insert(REFUSAL, HeaderValue::from_static("1"));
         if self.status == StatusCode::UNAUTHORIZED {
             // Requests are signed (handshake spec §5); there is no bearer scheme.
             let scheme = HeaderValue::from_static("Ainkrad-ES256");
@@ -113,6 +118,9 @@ impl IntoResponse for ApiError {
         response
     }
 }
+
+/// The header on every error the Core itself makes: `Ainkrad-Refusal: 1`.
+pub const REFUSAL: &str = "ainkrad-refusal";
 
 const CROCKFORD: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 

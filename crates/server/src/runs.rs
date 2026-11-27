@@ -744,6 +744,7 @@ pub async fn reconcile(app: &App, link: &dyn Link, runner: &str) {
     let mine: Vec<&Run> = live.iter().filter(|r| r.runner == runner).collect();
     for r in &mine {
         let seen = list.runs.iter().find(|i| i.run == r.id);
+        let mut crashed = None;
         let end = match (seen.map(|i| i.phase), r.state.as_str()) {
             // Only a start nobody is driving (the Core restarted mid-start): a driver in this
             // process promotes its own run when `run.start` answers.
@@ -762,6 +763,12 @@ pub async fn reconcile(app: &App, link: &dyn Link, runner: &str) {
                     i.reason.as_deref().unwrap_or("it is not running")
                 );
                 let _ = link.stop(runner, &r.id).await;
+                let exit = i
+                    .services
+                    .iter()
+                    .find(|s| Some(&s.name) == i.failed_service.as_ref())
+                    .and_then(|s| s.exit_code);
+                crashed = Some((i.failed_service.clone(), exit));
                 Some(("failed", Some("crash"), Some(why)))
             }
             (None | Some(RunPhase::Stopped), "running") => Some((
@@ -778,7 +785,10 @@ pub async fn reconcile(app: &App, link: &dyn Link, runner: &str) {
                 reason,
                 error: error.as_deref(),
             };
-            let _ = finish(app, r, end, system(&now)).await;
+            let ended = finish(app, r, end, system(&now)).await;
+            if let (Ok(true), Some((service, exit))) = (ended, crashed) {
+                crash_alert(app, r, service.as_deref(), exit).await;
+            }
         }
     }
     let known: HashSet<&str> = mine.iter().map(|r| r.id.as_str()).collect();
@@ -786,6 +796,23 @@ pub async fn reconcile(app: &App, link: &dyn Link, runner: &str) {
         if i.phase != RunPhase::Stopped && !known.contains(i.run.as_str()) {
             let _ = link.stop(runner, &i.run).await;
         }
+    }
+}
+
+/// `project.service_crashed` for `r`, which this reconcile just ended as a crash.
+async fn crash_alert(app: &App, r: &Run, service: Option<&str>, exit: Option<i32>) {
+    let restarts = match r.config_id {
+        Some(cid) => {
+            let since = iso_of_unix(app.clock.unix() - restart::WINDOW_SECS);
+            // This crash is one of them; the ones before it were each followed by a restart.
+            runs::crashes_since(&app.pool, r.project_id, cid, &since)
+                .await
+                .map_or(0, |n| (n - 1).max(0))
+        }
+        None => 0,
+    };
+    if let Err(e) = runs::service_crashed(&app.pool, r, service, exit, restarts).await {
+        tracing::warn!(run = r.id, error = %e, "recording a crash failed");
     }
 }
 
@@ -866,6 +893,8 @@ pub async fn sweep_loop(app: App) {
     // Restarts of crashed runs are due within seconds, so they are looked at more often.
     let mut quick = tokio::time::interval(Duration::from_secs(2));
     quick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut sample = tokio::time::interval(crate::api::v1::projects::run_progress::SAMPLE_EVERY);
+    sample.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     LazyLock::force(&BOOT);
     let link = HubLink(Arc::clone(&app.hub));
     loop {
@@ -873,6 +902,9 @@ pub async fn sweep_loop(app: App) {
             () = crate::api::stopping(&mut closing) => return,
             _ = tick.tick() => sweep(&app, &link).await,
             _ = quick.tick() => restart::pass(&app, &link).await,
+            _ = sample.tick() => {
+                crate::api::v1::projects::run_progress::sample_all(&app, &link).await;
+            }
         }
     }
 }

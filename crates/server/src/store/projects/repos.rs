@@ -188,6 +188,46 @@ pub async fn set_primary(
     Ok(())
 }
 
+/// Makes `branch` the repo's branch (`default_branch`: what the copy's HEAD, a run and a
+/// session check out), audited as `project.repo_branch_set`. The caller checked the copy has it.
+pub async fn set_branch(
+    pool: &SqlitePool,
+    project_id: i64,
+    repo_id: i64,
+    branch: &str,
+    who: Who<'_>,
+) -> Result<(), Error> {
+    if !branch_name_ok(branch) {
+        return refused("bad_request", "bad branch name");
+    }
+    let mut tx = crate::store::begin_write(pool).await?;
+    if get(&mut tx, project_id).await?.state == "archived" {
+        return refused("conflict", "the project is archived");
+    }
+    let all = repos(&mut tx, project_id).await?;
+    let Some(r) = all.iter().find(|r| r.id == repo_id) else {
+        return refused("not_found", "no such repo in the project");
+    };
+    sqlx::query("UPDATE core_project_repos SET default_branch = ? WHERE id = ?")
+        .bind(branch)
+        .bind(repo_id)
+        .execute(&mut *tx)
+        .await?;
+    let details = json!({"repo": r.name, "from": r.default_branch, "branch": branch,
+                         "by_device": who.by_device});
+    record(
+        &mut tx,
+        who.actor,
+        "project.repo_branch_set",
+        project_id,
+        details,
+        false,
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
 /// Records the state of a repo's mirror on the Core machine: the head it fetched, or why it could
 /// not. Not audited: a fetch is routine, like a usage tick.
 pub async fn set_mirror(

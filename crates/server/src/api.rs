@@ -94,6 +94,8 @@ pub struct App {
     pub mirrors: Option<Arc<crate::mirrors::Mirrors>>,
     /// Tool installs on runners, in flight and the last ones (`v1::runner_control`).
     pub tool_ops: Arc<v1::ToolOps>,
+    /// The preview proxy (`v1::projects::preview`): port streams to a private running project.
+    pub preview: Arc<crate::gateway::projects::Preview>,
     /// The Code Mode operation catalogue, built on first use (the modules are set by then).
     pub ops: Arc<std::sync::OnceLock<crate::ops_catalog::Catalogue>>,
     /// Code Mode's call windows, runs and in-flight counts (E2), in memory.
@@ -115,6 +117,7 @@ impl App {
         identity: Arc<Identity>,
     ) -> Self {
         Self {
+            preview: Arc::default(),
             origins: Arc::from([crate::auth::web::own_origin(&host)]),
             pool,
             clock,

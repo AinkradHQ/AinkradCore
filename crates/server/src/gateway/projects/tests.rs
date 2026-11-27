@@ -53,6 +53,8 @@ fn hop_by_hop_proxy_and_core_headers_are_not_forwarded() {
         ("x-forwarded-for", "203.0.113.44"),
         ("x-real-ip", "203.0.113.44"),
         ("x-ainkrad-session", "s_1"),
+        ("ainkrad-signature", "sig"),
+        ("ainkrad-session", "s_1"),
         ("accept", "text/html"),
         ("cookie", "app=1"),
     ] {
@@ -184,4 +186,19 @@ fn a_held_place_comes_back_on_drop_and_empty_keys_go() {
     assert!(hold(&counts, 1, 2).is_some(), "given back");
     drop(other);
     assert!(counts.lock().unwrap().is_empty(), "no key is kept at 0");
+}
+
+#[test]
+fn a_preview_holds_places_per_device_and_per_project() {
+    let p = Preview::default();
+    let mine: Vec<_> = (0..PER_DEVICE).map(|_| p.hold(1, "d_a").unwrap()).collect();
+    assert_eq!(p.hold(1, "d_a").err(), Some("device"));
+    let other: Vec<_> = (PER_DEVICE..PER_PROJECT)
+        .map(|_| p.hold(1, "d_b").unwrap())
+        .collect();
+    assert_eq!(p.hold(1, "d_c").err(), Some("project"));
+    // Another project still has room for another device.
+    let elsewhere = p.hold(2, "d_c").unwrap();
+    drop((mine, other, elsewhere));
+    assert!(p.hold(1, "d_a").is_ok(), "places come back");
 }

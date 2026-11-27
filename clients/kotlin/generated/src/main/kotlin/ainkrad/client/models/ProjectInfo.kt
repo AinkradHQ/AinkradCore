@@ -38,6 +38,7 @@ import kotlinx.serialization.Contextual
  * @param source `manual` or `github`.
  * @param state `active` or `archived`.
  * @param updatedAt RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4).
+ * @param color The project's colour, one of the app's accents: `graphite`, `violet`, `blue`, `teal`, `copper`, `sky`, `indigo`, `green`, `mint`, `rose`, `pink`, `orange`, `red`; none until one is picked (API 110).
  * @param defaultEnvironment The run environment a Run button uses by default; one of the project's.
  * @param fetchIntervalMinutes Minutes between automatic fetches: 10, 15, 60, or 0 for only when asked.
  * @param idleNever The idle stop is off: the run keeps going while nobody visits.
@@ -93,6 +94,10 @@ data class ProjectInfo (
     /* RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4). */
     @Contextual @SerialName(value = "updated_at")
     val updatedAt: java.time.OffsetDateTime,
+
+    /* The project's colour, one of the app's accents: `graphite`, `violet`, `blue`, `teal`, `copper`, `sky`, `indigo`, `green`, `mint`, `rose`, `pink`, `orange`, `red`; none until one is picked (API 110). */
+    @SerialName(value = "color")
+    val color: kotlin.String? = null,
 
     /* The run environment a Run button uses by default; one of the project's. */
     @SerialName(value = "default_environment")

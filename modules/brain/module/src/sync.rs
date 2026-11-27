@@ -415,7 +415,7 @@ async fn collect(
     // What each session was given from the Brain is cut out of its turns (no-echo guard).
     let echo = crate::echo::loaded(app, b).await?;
     'pages: loop {
-        let page = agents::list(&app.pool, before, 200).await?;
+        let page = agents::list(&app.pool, before, 200, None).await?;
         let Some(last) = page.last() else { break };
         before = Some(last.n);
         for s in &page {

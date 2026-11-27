@@ -217,11 +217,15 @@ pub async fn list(
     pool: &SqlitePool,
     before: Option<i64>,
     limit: u32,
+    project: Option<i64>,
 ) -> Result<Vec<Session>, sqlx::Error> {
-    let q =
-        format!("SELECT {COLUMNS} FROM core_agent_sessions WHERE n < ? ORDER BY n DESC LIMIT ?");
+    let q = format!(
+        "SELECT {COLUMNS} FROM core_agent_sessions WHERE n < ? AND (?2 IS NULL OR project_id = ?2) \
+         ORDER BY n DESC LIMIT ?3"
+    );
     sqlx::query(sqlx::AssertSqlSafe(q))
         .bind(before.unwrap_or(i64::MAX))
+        .bind(project)
         .bind(limit)
         .fetch_all(pool)
         .await?

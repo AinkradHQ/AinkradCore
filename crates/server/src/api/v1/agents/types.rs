@@ -217,6 +217,8 @@ pub struct Before {
     pub limit: Option<u32>,
     /// Only the attempts of this run (its first attempt's id, `as_…`).
     pub run: Option<String>,
+    /// Only the sessions started for this project (its id; API 110). An older Core ignores it.
+    pub project: Option<i64>,
 }
 
 /// A secret for the session: the broker's secret `name`, delivered under `var`.

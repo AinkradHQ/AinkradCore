@@ -6,8 +6,10 @@
 //! `repo_url_problem` here and again in the store, so no credential or odd scheme gets in.
 
 pub mod insight;
+pub mod preview;
 pub mod run_configs;
 pub mod run_logs;
+pub mod run_progress;
 pub mod run_spec;
 mod run_task;
 pub mod runs;
@@ -118,6 +120,11 @@ pub struct ProjectInfo {
     /// The run environment a Run button uses by default; one of the project's.
     #[schema(required = false)]
     pub default_environment: Option<String>,
+    /// The project's colour, one of the app's accents: `graphite`, `violet`, `blue`, `teal`,
+    /// `copper`, `sky`, `indigo`, `green`, `mint`, `rose`, `pink`, `orange`, `red`; none until one
+    /// is picked (API 110).
+    #[schema(required = false)]
+    pub color: Option<String>,
     /// The primary repo first, then by name.
     pub repos: Vec<ProjectRepo>,
     /// The linked Brain room; null when the Brain is off or the project has none.
@@ -165,6 +172,7 @@ pub(super) async fn info(app: &App, p: Project) -> Result<ProjectInfo, ApiError>
         runner: p.runner_pref.clone(),
         fetch_interval_minutes: p.fetch_interval_minutes,
         default_environment: p.default_environment.clone(),
+        color: p.color.clone(),
         repos,
         room,
         created_at: ts(&p.created_at),
@@ -235,6 +243,9 @@ pub struct NewProject {
     pub description: Option<String>,
     /// `auto` (default), `this_mac` or `home_server`.
     pub runner: Option<String>,
+    /// See `ProjectInfo.color` (API 110).
+    #[schema(required = false)]
+    pub color: Option<String>,
 }
 
 #[utoipa::path(post, path = "/api/v1/projects", operation_id = "createProject", tag = "projects",
@@ -257,15 +268,16 @@ pub async fn create(
         who(&me, &now),
     )
     .await?;
-    let p = match b.runner.as_deref() {
-        Some(r) => {
+    let p = match (b.runner.as_deref(), b.color.as_deref()) {
+        (None, None) => p,
+        (runner, color) => {
             let c = store::Change {
-                runner: Some(r),
+                runner,
+                color,
                 ..store::Change::default()
             };
             store::change(&app.pool, p.id, &c, who(&me, &now)).await?
         }
-        None => p,
     };
     Ok(Json(info(&app, p).await?))
 }
@@ -294,6 +306,9 @@ pub struct UpdateProject {
     /// One of the project's run environments; an empty string clears it.
     #[schema(required = false)]
     pub default_environment: Option<String>,
+    /// See `ProjectInfo.color`; an empty string clears it (API 110).
+    #[schema(required = false)]
+    pub color: Option<String>,
 }
 
 #[utoipa::path(patch, path = "/api/v1/projects/{id}", operation_id = "updateProject",
@@ -321,6 +336,7 @@ pub async fn update(
         runner: b.runner.as_deref(),
         fetch_interval_minutes: b.fetch_interval_minutes,
         default_environment: b.default_environment.as_deref(),
+        color: b.color.as_deref(),
     };
     let p = store::change(&app.pool, num(&id, "project")?, &c, who(&me, &now)).await?;
     Ok(Json(info(&app, p).await?))
@@ -493,6 +509,81 @@ pub async fn remove_repo(
     if let Some(mirrors) = app.mirrors.clone() {
         let _ = tokio::spawn(async move { mirrors.forget(repo).await }).await;
     }
+    current(&app, id).await
+}
+
+/// A repo's change (API 110).
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct UpdateProjectRepo {
+    /// The branch the repo follows (its `default_branch`): one the Core's copy holds.
+    pub branch: String,
+}
+
+#[utoipa::path(patch, path = "/api/v1/projects/{id}/repos/{repo}",
+    operation_id = "updateProjectRepo", tag = "projects",
+    params(("id" = String, Path, description = "The project's id"),
+           ("repo" = String, Path, description = "The repo's id")),
+    request_body = UpdateProjectRepo,
+    responses((status = 200, description = "The repo follows `branch` (audited as \
+        `project.repo_branch_set`) and the Core fetched it again, so the copy's head is that \
+        branch's; the project as it now is (API 110). A branch the copy lacks is looked for with \
+        one fetch first. 400 for a bad name or a branch the remote does not have; 404 for no such \
+        project or repo; 409 `conflict` for an archived project, 409 `not_fetched` when the Core \
+        has no copy of the repo yet; 503 `mirrors_unavailable` when this Core keeps no repo \
+        copies", body = ProjectInfo)))]
+pub async fn update_repo(
+    State(app): State<App>,
+    Extension(me): Extension<Caller>,
+    Path((id, repo)): Path<(String, String)>,
+    Json(b): Json<UpdateProjectRepo>,
+) -> ApiResult<ProjectInfo> {
+    let (id, repo) = (num(&id, "project")?, num(&repo, "repo")?);
+    let mut conn = app.pool.acquire().await?;
+    // Before any fetch: an archived project's copies are not touched.
+    if store::get(&mut conn, id).await?.state == "archived" {
+        return Err(ApiError::conflict("the project is archived"));
+    }
+    let r = store::repos(&mut conn, id)
+        .await?
+        .into_iter()
+        .find(|r| r.id == repo)
+        .ok_or_else(|| ApiError::not_found("no such repo"))?;
+    drop(conn);
+    if !ainkrad_proto::runner::branch_name_ok(&b.branch) {
+        return Err(ApiError::bad_request("bad branch name"));
+    }
+    if b.branch == r.default_branch {
+        return current(&app, id).await;
+    }
+    let mirrors = super::mirrors::mirrors(&app)?;
+    let key = crate::mirrors::key(id, &r.remote_url);
+    let mut has = mirrors.has_branch(repo, &key, &b.branch).await;
+    // A branch made since the last fetch: one fetch, then look again.
+    if has == Ok(false) {
+        let _ = crate::mirrors::fetch_now(&app, repo).await;
+        has = mirrors.has_branch(repo, &key, &b.branch).await;
+    }
+    match has {
+        Ok(true) => {}
+        Ok(false) => {
+            return Err(ApiError::bad_request(format!(
+                "the repo has no branch {}",
+                b.branch
+            )));
+        }
+        Err(_) => {
+            return Err(ApiError::new(
+                axum::http::StatusCode::CONFLICT,
+                "not_fetched",
+                "the Core has not copied this repo yet; fetch it first",
+            ));
+        }
+    }
+    let now = app.clock.now();
+    store::set_branch(&app.pool, id, repo, &b.branch, who(&me, &now)).await?;
+    // The copy's HEAD follows the branch now (a failed fetch shows in `mirror.error`).
+    let _ = crate::mirrors::fetch_now(&app, repo).await;
     current(&app, id).await
 }
 

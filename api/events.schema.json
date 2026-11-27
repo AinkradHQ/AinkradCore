@@ -87,6 +87,7 @@
     "project.run_gave_up",
     "project.run_started",
     "project.run_stopped",
+    "project.service_crashed",
     "project.spec_saved",
     "project.updated",
     "runner.connected",

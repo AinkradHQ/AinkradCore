@@ -124,6 +124,7 @@ pub(super) async fn start(
                 config_id: Some(cfg.id),
                 environment: Some(env_name),
                 job: Some(id),
+                steps: None,
             })
         }
         Started::Local(why) => Err(ApiError::new(

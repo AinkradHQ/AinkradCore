@@ -410,3 +410,30 @@ async fn project_defaults_are_set_for_all_and_an_archived_project_is_unarchived(
     let un = admin(&fx, Method::POST, &format!("{p}/unarchive"), Value::Null).await;
     assert_eq!(un.1["state"], "active", "{}", un.1);
 }
+
+#[tokio::test]
+async fn a_projects_colour_is_one_of_the_apps_accents_and_clears() {
+    let fx = fx().await;
+    let made = admin(
+        &fx,
+        Method::POST,
+        "/api/v1/projects",
+        json!({"slug": "blog", "name": "Blog", "color": "teal"}),
+    )
+    .await;
+    assert_eq!(made.1["color"], "teal", "{}", made.1);
+    let id = shop(&fx).await;
+    let p = format!("/api/v1/projects/{id}");
+    assert!(fx.ok(&p).await["color"].is_null(), "none until picked");
+    let r = admin(&fx, Method::PATCH, &p, json!({"color": "rose"})).await;
+    assert_eq!(r.1["color"], "rose");
+    // Another change keeps it.
+    let r = admin(&fx, Method::PATCH, &p, json!({"name": "Shop 2"})).await;
+    assert_eq!(r.1["color"], "rose");
+    for bad in ["purple", "Rose", "#ff0000"] {
+        let r = admin(&fx, Method::PATCH, &p, json!({"color": bad})).await;
+        assert_eq!(code(&r), (StatusCode::BAD_REQUEST, "bad_request"), "{bad}");
+    }
+    let r = admin(&fx, Method::PATCH, &p, json!({"color": ""})).await;
+    assert!(r.1["color"].is_null());
+}

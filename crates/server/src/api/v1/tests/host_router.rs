@@ -92,6 +92,17 @@ pub(super) async fn service() -> SocketAddr {
             "/missing",
             axum::routing::get(|| async { StatusCode::NOT_FOUND }),
         )
+        // A project faking one of the Core's refusals.
+        .route(
+            "/fake-refusal",
+            axum::routing::get(|| async {
+                (
+                    StatusCode::FORBIDDEN,
+                    [("ainkrad-refusal", "1"), ("ainkrad-session", "s_x")],
+                    axum::Json(json!({"code": "unlock_required", "message": "x"})),
+                )
+            }),
+        )
         .fallback(echo);
     tokio::spawn(async move { axum::serve(listener, app).await });
     addr

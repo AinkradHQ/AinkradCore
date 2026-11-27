@@ -15,6 +15,7 @@
 
 package ainkrad.client.models
 
+import ainkrad.client.models.RunStep
 
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerialName
@@ -35,6 +36,7 @@ import kotlinx.serialization.Contextual
  * @param idleStopAt RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4).
  * @param job A `task` configuration's heavy job (`j_…`, E15-3): follow it with `/jobs/{id}`. Absent for a service run.
  * @param lastActivityAt RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4).
+ * @param steps How far the start got (API 110), on `GET /run` only: for a `starting` run, a `running` one (all `done`) and a failed start (its step `failed`); absent otherwise. See `RunStep`.
  * @param stopReason Why it ended, or is ending: `user`, `idle`, `crash`, `runner_lost`, `replaced` or `start_failed`.
  * @param stoppedAt RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4).
  */
@@ -86,6 +88,10 @@ data class ProjectRun (
     /* RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4). */
     @Contextual @SerialName(value = "last_activity_at")
     val lastActivityAt: java.time.OffsetDateTime? = null,
+
+    /* How far the start got (API 110), on `GET /run` only: for a `starting` run, a `running` one (all `done`) and a failed start (its step `failed`); absent otherwise. See `RunStep`. */
+    @SerialName(value = "steps")
+    val steps: kotlin.collections.List<RunStep>? = null,
 
     /* Why it ended, or is ending: `user`, `idle`, `crash`, `runner_lost`, `replaced` or `start_failed`. */
     @SerialName(value = "stop_reason")

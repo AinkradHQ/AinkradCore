@@ -124,6 +124,21 @@ impl Mirrors {
         })
     }
 
+    /// Whether the copy holds branch `branch` (a valid name only). `Err` when there is no copy.
+    pub async fn has_branch(&self, repo: i64, key: &str, branch: &str) -> Result<bool, String> {
+        let dir = self
+            .ready(repo, key)
+            .map_err(|_| "the Core has not fetched this repo yet".to_owned())?;
+        if !branch_name_ok(branch) {
+            return Ok(false);
+        }
+        let tip = format!("refs/heads/{branch}^{{commit}}");
+        Ok(self
+            .run(&["-C", &dir, "rev-parse", "--verify", "-q", &tip], None)
+            .await
+            .is_ok())
+    }
+
     /// Commits on any branch in the last `days` days, newest first, at most `max`.
     pub async fn commits_since(
         &self,

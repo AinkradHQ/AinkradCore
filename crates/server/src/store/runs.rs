@@ -440,6 +440,32 @@ pub async fn crashes_since(
     .await
 }
 
+/// Audits and emits `project.service_crashed` (API 110): a running run's service exited on its
+/// own, so the run ended `crash`. `restarts` is how many times the Core restarted the run's
+/// configuration in the restart window before this crash (0 for a plain project run).
+pub async fn service_crashed(
+    pool: &SqlitePool,
+    run: &Run,
+    service: Option<&str>,
+    exit_code: Option<i32>,
+    restarts: i64,
+) -> Result<(), Error> {
+    let mut tx = super::begin_write(pool).await?;
+    let details = json!({"run": run.id, "service": service, "exit_code": exit_code,
+                         "restarts": restarts, "config": run.config_id,
+                         "environment": run.environment});
+    record(
+        &mut tx,
+        AuditActor::System,
+        "project.service_crashed",
+        run.project_id,
+        details,
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
 /// Audits and emits `project.run_gave_up`: the Core stopped restarting `run`'s configuration.
 pub async fn gave_up(pool: &SqlitePool, run: &Run, crashes: i64, max: i64) -> Result<(), Error> {
     let mut tx = super::begin_write(pool).await?;

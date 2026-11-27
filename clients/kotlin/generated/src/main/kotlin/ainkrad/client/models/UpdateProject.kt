@@ -23,6 +23,7 @@ import kotlinx.serialization.Contextual
 /**
  * What changes; an omitted field is kept.
  *
+ * @param color See `ProjectInfo.color`; an empty string clears it (API 110).
  * @param cpuLimit CPUs a run may use, 0.1 to 16.
  * @param defaultEnvironment One of the project's run environments; an empty string clears it.
  * @param description 
@@ -38,6 +39,10 @@ import kotlinx.serialization.Contextual
 @Serializable
 
 data class UpdateProject (
+
+    /* See `ProjectInfo.color`; an empty string clears it (API 110). */
+    @SerialName(value = "color")
+    val color: kotlin.String? = null,
 
     /* CPUs a run may use, 0.1 to 16. */
     @SerialName(value = "cpu_limit")

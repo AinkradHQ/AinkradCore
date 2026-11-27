@@ -400,7 +400,20 @@
 ///    (`thinking`, `drawing`, `placing`), `flow` and per direction `screens`, and fails a drawing stuck past six
 ///    minutes. `POST /docs/{doc}/unarchive`; `GET /docs` and `/collections` take `limit`, `offset` and `sort`
 ///    (`name`, `updated`), `GET /assets` `limit` and `offset`. An older Core ignores the new fields and queries.
-pub const API_MINOR: u32 = 109;
+/// 110: Projects for the app (2026-11-27). `GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS
+///    /projects/{id}/preview/{path}` (`previewProject`): the running app through the signed API, for a
+///    private run too (409 `not_running`, `no_preview`; any query names pass). `GET /agent-sessions`
+///    takes `project`. `ProjectRun.steps` (on `GET /run`): [{name `pull`|`build`|`start`|`health`,
+///    state `done`|`active`|`pending`|`failed`, detail?}]. `GET /projects/{id}/run/metrics`
+///    (`getProjectRunMetrics`): the last 60 CPU/memory samples per service. `color` on `ProjectInfo`,
+///    `NewProject` and `UpdateProject` (an app accent name; "" clears). `PATCH
+///    /projects/{id}/repos/{repo}` (`updateProjectRepo`, {branch}; 409 `not_fetched`). Event
+///    `project.service_crashed` {id, run, service, exit_code, restarts, config, environment}. Every
+///    error the Core itself makes carries `Ainkrad-Refusal: 1` (a project's answer through the
+///    preview or its public link never does). Preview answers: cookie paths and `Location` under
+///    the preview, `Cache-Control: no-store`, a sandbox CSP, `Cross-Origin-Resource-Policy:
+///    same-origin`. An older Core 404s the routes and ignores the fields and the query.
+pub const API_MINOR: u32 = 110;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
