@@ -125,6 +125,10 @@ pub struct ProjectInfo {
     /// is picked (API 110).
     #[schema(required = false)]
     pub color: Option<String>,
+    /// What it is: `web` (default), `app` (desktop or mobile), `infra` (infrastructure, an OS) or
+    /// `other` (not software) (API 111).
+    #[schema(required = false)]
+    pub kind: String,
     /// The primary repo first, then by name.
     pub repos: Vec<ProjectRepo>,
     /// The linked Brain room; null when the Brain is off or the project has none.
@@ -173,6 +177,7 @@ pub(super) async fn info(app: &App, p: Project) -> Result<ProjectInfo, ApiError>
         fetch_interval_minutes: p.fetch_interval_minutes,
         default_environment: p.default_environment.clone(),
         color: p.color.clone(),
+        kind: p.kind.clone(),
         repos,
         room,
         created_at: ts(&p.created_at),
@@ -246,6 +251,9 @@ pub struct NewProject {
     /// See `ProjectInfo.color` (API 110).
     #[schema(required = false)]
     pub color: Option<String>,
+    /// See `ProjectInfo.kind`; default `web`. 400 `bad_kind` for any other value (API 111).
+    #[schema(required = false)]
+    pub kind: Option<String>,
 }
 
 #[utoipa::path(post, path = "/api/v1/projects", operation_id = "createProject", tag = "projects",
@@ -259,6 +267,9 @@ pub async fn create(
     Json(b): Json<NewProject>,
 ) -> ApiResult<ProjectInfo> {
     let now = app.clock.now();
+    if let Some(k) = &b.kind {
+        store::kind_ok(k)?;
+    }
     let p = store::create(
         &app.pool,
         &b.slug,
@@ -268,12 +279,13 @@ pub async fn create(
         who(&me, &now),
     )
     .await?;
-    let p = match (b.runner.as_deref(), b.color.as_deref()) {
-        (None, None) => p,
-        (runner, color) => {
+    let p = match (b.runner.as_deref(), b.color.as_deref(), b.kind.as_deref()) {
+        (None, None, None) => p,
+        (runner, color, kind) => {
             let c = store::Change {
                 runner,
                 color,
+                kind,
                 ..store::Change::default()
             };
             store::change(&app.pool, p.id, &c, who(&me, &now)).await?
@@ -309,6 +321,9 @@ pub struct UpdateProject {
     /// See `ProjectInfo.color`; an empty string clears it (API 110).
     #[schema(required = false)]
     pub color: Option<String>,
+    /// See `ProjectInfo.kind`; 400 `bad_kind` for any other value (API 111).
+    #[schema(required = false)]
+    pub kind: Option<String>,
 }
 
 #[utoipa::path(patch, path = "/api/v1/projects/{id}", operation_id = "updateProject",
@@ -337,6 +352,7 @@ pub async fn update(
         fetch_interval_minutes: b.fetch_interval_minutes,
         default_environment: b.default_environment.as_deref(),
         color: b.color.as_deref(),
+        kind: b.kind.as_deref(),
     };
     let p = store::change(&app.pool, num(&id, "project")?, &c, who(&me, &now)).await?;
     Ok(Json(info(&app, p).await?))

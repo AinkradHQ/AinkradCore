@@ -210,6 +210,9 @@ pub struct NewGithubProject {
     pub slug: Option<String>,
     /// Default: the workspace's GitHub default.
     pub connection_id: Option<i64>,
+    /// See `ProjectInfo.kind`; default `web`. 400 `bad_kind` for any other value (API 111).
+    #[schema(required = false)]
+    pub kind: Option<String>,
 }
 
 #[utoipa::path(post, path = "/api/v1/projects/from-github",
@@ -230,6 +233,9 @@ pub async fn create(
     // Cheap check first, before any GitHub call.
     if let Some(n) = &b.name {
         store::name_ok(n)?;
+    }
+    if let Some(k) = &b.kind {
+        store::kind_ok(k)?;
     }
     if let Some(why) = b.slug.as_deref().and_then(store::slug_problem) {
         return Err(ApiError::bad_request(why));
@@ -279,6 +285,16 @@ pub async fn create(
         bind,
     )
     .await?;
+    let p = match b.kind.as_deref() {
+        None => p,
+        kind => {
+            let c = store::Change {
+                kind,
+                ..store::Change::default()
+            };
+            store::change(&app.pool, p.id, &c, who(&me, &now)).await?
+        }
+    };
     let mut conn = app.pool.acquire().await?;
     let made = store::repos(&mut conn, p.id).await?;
     drop(conn);

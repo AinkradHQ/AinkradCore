@@ -5321,7 +5321,7 @@
             ]
           },
           "project_id": {
-            "description": "Start the session for a project (P3-02): the Core builds the workspace from the project's\nrepos (the primary one first, each under its repo name when there are several), the\nrunner clones them from the Core's copies, and the project's Brain room, if it has one,\nis claimed (the room's model policy then applies, so a session with no chain is refused\n403 `claim_refused`). Excludes `workspace` (400). 404 for no such project, 409\n`project_archived`, 409 `project_has_no_repos`, 400 when the caller names a mirror in\n`workspace`: only the Core sets one.",
+            "description": "Start the session for a project (P3-02): the Core builds the workspace from the project's\nrepos (the primary one first, each under its repo name when there are several), the\nrunner clones them from the Core's copies (a project with no repos gets no workspace: the\nsession works in its own empty folder, still tied to the project), and the project's Brain room, if it has one,\nis claimed (the room's model policy then applies, so a session with no chain is refused\n403 `claim_refused`). Excludes `workspace` (400). 404 for no such project, 409\n`project_archived`, 400 when the caller names a mirror in\n`workspace`: only the Core sets one.",
             "format": "int64",
             "type": [
               "integer",
@@ -5518,6 +5518,13 @@
             "format": "int64",
             "type": [
               "integer",
+              "null"
+            ]
+          },
+          "kind": {
+            "description": "See `ProjectInfo.kind`; default `web`. 400 `bad_kind` for any other value (API 111).",
+            "type": [
+              "string",
               "null"
             ]
           },
@@ -5786,6 +5793,13 @@
           },
           "description": {
             "description": "Default empty.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "description": "See `ProjectInfo.kind`; default `web`. 400 `bad_kind` for any other value (API 111).",
             "type": [
               "string",
               "null"
@@ -6753,6 +6767,10 @@
               "boolean",
               "null"
             ]
+          },
+          "kind": {
+            "description": "What it is: `web` (default), `app` (desktop or mobile), `infra` (infrastructure, an OS) or\n`other` (not software) (API 111).",
+            "type": "string"
           },
           "mem_limit_mb": {
             "format": "int64",
@@ -10224,6 +10242,13 @@
               "null"
             ]
           },
+          "kind": {
+            "description": "See `ProjectInfo.kind`; 400 `bad_kind` for any other value (API 111).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "mem_limit_mb": {
             "description": "Memory a run may use, 64 to 32768 MB.",
             "format": "int64",
@@ -10544,7 +10569,7 @@
       "name": ""
     },
     "title": "Ainkrad Core",
-    "version": "1.110.0"
+    "version": "1.111.0"
   },
   "openapi": "3.1.0",
   "paths": {

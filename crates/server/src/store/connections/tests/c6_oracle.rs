@@ -172,7 +172,9 @@ fn covers(grants: &[Gr], u: &Use<'_>, v: &str) -> bool {
     let reaches =
         |g: &Gr| g.caps.contains(&u.cap) && g.limits.as_ref().is_none_or(|l| accepts_any(l, v));
     let user_side = grants.iter().any(|g| {
-        ((g.kind == "user" && g.who == "1") || (g.kind == "role" && g.who == u.role)) && reaches(g)
+        ((g.kind == "user" && g.who == "1")
+            || (g.kind == "role" && (g.who == u.role || (g.who == "member" && u.role == "admin"))))
+            && reaches(g)
     });
     let agent_side = u.agent.is_none_or(|a| {
         grants

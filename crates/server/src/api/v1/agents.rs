@@ -485,7 +485,7 @@ pub async fn create(
                 "project_id and workspace exclude each other",
             ));
         }
-        Some(id) => Some(project::workspace_for(&app, id).await?),
+        Some(id) => project::workspace_for(&app, id).await?,
         None => {
             project::no_mirror(b.workspace.as_ref())?;
             None

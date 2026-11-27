@@ -437,3 +437,37 @@ async fn a_projects_colour_is_one_of_the_apps_accents_and_clears() {
     let r = admin(&fx, Method::PATCH, &p, json!({"color": ""})).await;
     assert!(r.1["color"].is_null());
 }
+
+#[tokio::test]
+async fn a_projects_kind_defaults_to_web_and_is_one_of_four() {
+    let fx = fx().await;
+    let made = admin(
+        &fx,
+        Method::POST,
+        "/api/v1/projects",
+        json!({"slug": "mac-app", "name": "Mac App", "kind": "app"}),
+    )
+    .await;
+    assert_eq!(made.1["kind"], "app", "{}", made.1);
+    let r = admin(
+        &fx,
+        Method::POST,
+        "/api/v1/projects",
+        json!({"slug": "oops", "name": "Oops", "kind": "game"}),
+    )
+    .await;
+    assert_eq!(code(&r), (StatusCode::BAD_REQUEST, "bad_kind"));
+    let id = shop(&fx).await;
+    let p = format!("/api/v1/projects/{id}");
+    assert_eq!(fx.ok(&p).await["kind"], "web", "web until set");
+    let r = admin(&fx, Method::PATCH, &p, json!({"kind": "infra"})).await;
+    assert_eq!(r.1["kind"], "infra");
+    let r = admin(&fx, Method::PATCH, &p, json!({"name": "Shop 2"})).await;
+    assert_eq!(r.1["kind"], "infra", "another change keeps it");
+    for bad in ["", "Web", "server"] {
+        let r = admin(&fx, Method::PATCH, &p, json!({"kind": bad})).await;
+        assert_eq!(code(&r), (StatusCode::BAD_REQUEST, "bad_kind"), "{bad}");
+    }
+    let r = admin(&fx, Method::PATCH, &p, json!({"kind": "other"})).await;
+    assert_eq!(r.1["kind"], "other");
+}

@@ -27,6 +27,7 @@ import kotlinx.serialization.Contextual
  * @param slug See `ProjectInfo.slug`; it is the project's public host name.
  * @param color See `ProjectInfo.color` (API 110).
  * @param description Default empty.
+ * @param kind See `ProjectInfo.kind`; default `web`. 400 `bad_kind` for any other value (API 111).
  * @param runner `auto` (default), `this_mac` or `home_server`.
  */
 @Serializable
@@ -48,6 +49,10 @@ data class NewProject (
     /* Default empty. */
     @SerialName(value = "description")
     val description: kotlin.String? = null,
+
+    /* See `ProjectInfo.kind`; default `web`. 400 `bad_kind` for any other value (API 111). */
+    @SerialName(value = "kind")
+    val kind: kotlin.String? = null,
 
     /* `auto` (default), `this_mac` or `home_server`. */
     @SerialName(value = "runner")

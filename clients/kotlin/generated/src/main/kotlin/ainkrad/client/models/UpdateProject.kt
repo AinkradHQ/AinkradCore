@@ -31,6 +31,7 @@ import kotlinx.serialization.Contextual
  * @param fetchIntervalMinutes Minutes between automatic fetches: 10, 15, 60, or 0 for only when asked.
  * @param idleMinutes Idle stop, 5 to 1440 minutes.
  * @param idleNever Turn the idle stop off (true) or back on (false).
+ * @param kind See `ProjectInfo.kind`; 400 `bad_kind` for any other value (API 111).
  * @param memLimitMb Memory a run may use, 64 to 32768 MB.
  * @param name 
  * @param runner Where it prefers to run: `auto`, `this_mac` or `home_server`.
@@ -69,6 +70,10 @@ data class UpdateProject (
     /* Turn the idle stop off (true) or back on (false). */
     @SerialName(value = "idle_never")
     val idleNever: kotlin.Boolean? = null,
+
+    /* See `ProjectInfo.kind`; 400 `bad_kind` for any other value (API 111). */
+    @SerialName(value = "kind")
+    val kind: kotlin.String? = null,
 
     /* Memory a run may use, 64 to 32768 MB. */
     @SerialName(value = "mem_limit_mb")
