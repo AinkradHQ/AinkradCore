@@ -232,6 +232,7 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("PUT", "/api/v1/projects/defaults", "admin"),
     ("POST", "/api/v1/projects/{id}/repos", "admin"),
     ("DELETE", "/api/v1/projects/{id}/repos/{repo}", "admin"),
+    ("PATCH", "/api/v1/projects/{id}/repos/{repo}", "admin"),
     (
         "POST",
         "/api/v1/projects/{id}/repos/{repo}/primary",
@@ -255,6 +256,15 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("POST", "/api/v1/mirrors/{repo}/git-upload-pack", "runner"),
     ("POST", "/api/v1/mirrors/{repo}/git-receive-pack", "runner"),
     ("GET", "/api/v1/projects/{id}/run", "read"),
+    ("GET", "/api/v1/projects/{id}/run/metrics", "read"),
+    // The preview proxy (API 110): reading the running app is `read`, anything that can change it `admin`.
+    ("GET", "/api/v1/projects/{id}/preview/{path}", "read"),
+    ("HEAD", "/api/v1/projects/{id}/preview/{path}", "read"),
+    ("POST", "/api/v1/projects/{id}/preview/{path}", "admin"),
+    ("PUT", "/api/v1/projects/{id}/preview/{path}", "admin"),
+    ("PATCH", "/api/v1/projects/{id}/preview/{path}", "admin"),
+    ("DELETE", "/api/v1/projects/{id}/preview/{path}", "admin"),
+    ("OPTIONS", "/api/v1/projects/{id}/preview/{path}", "admin"),
     ("POST", "/api/v1/projects/{id}/run/start", "admin"),
     ("POST", "/api/v1/projects/{id}/run/stop", "admin"),
     ("POST", "/api/v1/projects/{id}/run/restart", "admin"),
@@ -482,8 +492,14 @@ pub const UNLOCKED: &[(&str, &str)] = &[
     ("GET", "/api/v1/jobs/{id}/stream"),
 ];
 
-/// Whether `path` fits `template` segment by segment.
+/// Whether `path` fits `template` segment by segment. A last segment `{path}` is the rest of the
+/// path, slashes included, empty too (the preview proxy's `…/preview/{path}`).
 pub(super) fn fits(template: &str, path: &str) -> bool {
+    if let Some(head) = template.strip_suffix("/{path}") {
+        let n = head.split('/').count();
+        let segs: Vec<&str> = path.splitn(n + 1, '/').collect();
+        return segs.len() == n + 1 && fits(head, &segs[..n].join("/"));
+    }
     let (t, p): (Vec<&str>, Vec<&str>) = (template.split('/').collect(), path.split('/').collect());
     t.len() == p.len()
         && t.iter()

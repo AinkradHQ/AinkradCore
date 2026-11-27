@@ -493,3 +493,64 @@ async fn a_copy_is_served_only_to_a_device_with_a_live_lease_while_its_project_i
     );
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// API 110: a repo follows another branch only when the copy has it; the copy's head follows.
+#[tokio::test]
+async fn a_repos_branch_changes_to_one_the_copy_holds() {
+    let (fx, id, repo, _, dir) = shop().await;
+    let uri = format!("/api/v1/projects/{id}/repos/{repo}");
+    let patch = |b: &str| {
+        req(
+            Method::PATCH,
+            &uri,
+            Some(&fx.dev),
+            Some(json!({"branch": b})),
+        )
+    };
+    // No copy yet.
+    let r = send(&fx.app, patch("dev")).await;
+    assert_eq!(
+        (r.0, r.1["code"].as_str()),
+        (StatusCode::CONFLICT, Some("not_fetched"))
+    );
+    assert_eq!(fetch(&fx, &fx.dev, id, repo).await.0, StatusCode::OK);
+    // A branch made on the remote after the fetch: found by one more fetch.
+    let remote = dir.join("remote");
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+            .args(args)
+            .current_dir(&remote)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+        String::from_utf8_lossy(&out.stdout).trim().to_owned()
+    };
+    git(&["checkout", "-q", "-b", "dev"]);
+    std::fs::write(remote.join("b.txt"), "two").unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-q", "-m", "two"]);
+    let dev_head = git(&["rev-parse", "HEAD"]);
+    let r = send(&fx.app, patch("dev")).await;
+    assert_eq!(r.0, StatusCode::OK, "{}", r.1);
+    let row = &r.1["repos"][0];
+    assert_eq!(row["default_branch"], "dev");
+    assert_eq!(row["mirror"]["head"], dev_head.as_str());
+    for bad in ["nope", "../x", ""] {
+        let r = send(&fx.app, patch(bad)).await;
+        assert_eq!(r.0, StatusCode::BAD_REQUEST, "{bad}: {}", r.1);
+    }
+    let gone = format!("/api/v1/projects/{id}/repos/999");
+    let r = send(
+        &fx.app,
+        req(
+            Method::PATCH,
+            &gone,
+            Some(&fx.dev),
+            Some(json!({"branch": "dev"})),
+        ),
+    )
+    .await;
+    assert_eq!(r.0, StatusCode::NOT_FOUND);
+}

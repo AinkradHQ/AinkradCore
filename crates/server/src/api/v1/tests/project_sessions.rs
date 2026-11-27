@@ -403,3 +403,37 @@ async fn ending_a_session_revokes_its_leases_unless_a_sibling_still_runs() {
     assert!(!may().await);
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[tokio::test]
+async fn sessions_list_by_project() {
+    let fx = fx().await;
+    let vm = super::secrets::runner(&fx, "vm").await;
+    let (a, b) = (project(&fx, "aa").await, project(&fx, "bb").await);
+    let policy = json!({"mode": "ask"});
+    let new = NewSession {
+        runner: &vm.id,
+        harness: "claude",
+        model: None,
+        prompt: None,
+        workspace: None,
+        policy: &policy,
+        secrets: &[],
+        created_by: &fx.dev.id,
+    };
+    let sys = ainkrad_core::audit::AuditActor::System;
+    let mine = store::create(&fx.app.pool, &new, sys, NOW).await.unwrap();
+    store::set_project(&fx.app.pool, &mine.id, a).await.unwrap();
+    let other = store::create(&fx.app.pool, &new, sys, NOW).await.unwrap();
+    let ids = |v: &Value| -> Vec<String> {
+        v.as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["id"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    let only_a = fx.ok(&format!("/api/v1/agent-sessions?project={a}")).await;
+    assert_eq!(ids(&only_a).as_slice(), std::slice::from_ref(&mine.id));
+    assert!(ids(&fx.ok(&format!("/api/v1/agent-sessions?project={b}")).await).is_empty());
+    let all = ids(&fx.ok("/api/v1/agent-sessions").await);
+    assert!(all.contains(&mine.id) && all.contains(&other.id));
+}

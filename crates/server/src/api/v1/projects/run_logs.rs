@@ -275,6 +275,13 @@ pub async fn services(
         Ok(o) => o,
         Err(e) => return Err(runner_error(&app, run.project_id, e).await),
     };
+    super::run_progress::record(
+        &run.id,
+        app.clock.unix(),
+        &app.clock.now(),
+        &o.services,
+        super::run_progress::MIN_GAP_SECS,
+    );
     Ok(Json(RunServices {
         run: Some(run.id),
         services: o

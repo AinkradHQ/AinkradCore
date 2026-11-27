@@ -31,6 +31,12 @@ pub const RESERVED: &[&str] = &[
 /// Minutes between automatic fetches a project may pick; 0 is only when asked.
 pub const FETCH_INTERVALS: [i64; 4] = [0, 10, 15, 60];
 
+/// A project's colour: the app's accent names (`CoreAccent`).
+pub const COLORS: [&str; 13] = [
+    "graphite", "violet", "blue", "teal", "copper", "sky", "indigo", "green", "mint", "rose",
+    "pink", "orange", "red",
+];
+
 /// The values of a project's runner preference.
 pub const RUNNERS: [&str; 3] = ["auto", "this_mac", "home_server"];
 
@@ -55,6 +61,8 @@ pub struct Project {
     pub fetch_interval_minutes: i64,
     /// One of the project's run environments, when set.
     pub default_environment: Option<String>,
+    /// One of [`COLORS`], when picked.
+    pub color: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -109,7 +117,7 @@ pub fn slug_problem(slug: &str) -> Option<&'static str> {
 
 const SELECT: &str = "SELECT id, slug, name, description, state, source, secret_group, expose, \
     idle_minutes, idle_never, cpu_limit, mem_limit_mb, runner_pref, fetch_interval_minutes, \
-    default_environment, created_at, updated_at FROM core_projects";
+    default_environment, color, created_at, updated_at FROM core_projects";
 
 fn project(r: SqliteRow) -> Result<Project, sqlx::Error> {
     Ok(Project {
@@ -128,6 +136,7 @@ fn project(r: SqliteRow) -> Result<Project, sqlx::Error> {
         runner_pref: r.try_get("runner_pref")?,
         fetch_interval_minutes: r.try_get("fetch_interval_minutes")?,
         default_environment: r.try_get("default_environment")?,
+        color: r.try_get("color")?,
         created_at: r.try_get("created_at")?,
         updated_at: r.try_get("updated_at")?,
     })
@@ -320,6 +329,8 @@ pub struct Change<'a> {
     pub fetch_interval_minutes: Option<i64>,
     /// An empty string clears it.
     pub default_environment: Option<&'a str>,
+    /// One of [`COLORS`]; an empty string clears it.
+    pub color: Option<&'a str>,
 }
 
 /// Changes name, description and/or public exposure (`None` keeps it). An archived project is
@@ -405,6 +416,17 @@ pub async fn change(
             );
         }
     }
+    let color = match c.color {
+        Some("") => None,
+        Some(k) if COLORS.contains(&k) => Some(k.to_owned()),
+        Some(_) => {
+            return refused(
+                "bad_request",
+                "a colour is one of graphite, violet, blue, teal, copper, sky, indigo, green, mint, rose, pink, orange or red",
+            );
+        }
+        None => old.color.clone(),
+    };
     let never = c.idle_never.unwrap_or(old.idle_never);
     limits_ok(idle, cpu, mem)?;
     let slug = c.slug.unwrap_or(&old.slug);
@@ -433,7 +455,7 @@ pub async fn change(
     sqlx::query(
         "UPDATE core_projects SET slug = ?, name = ?, description = ?, expose = ?, \
          idle_minutes = ?, idle_never = ?, cpu_limit = ?, mem_limit_mb = ?, runner_pref = ?, \
-         fetch_interval_minutes = ?, default_environment = ?, updated_at = ? WHERE id = ?",
+         fetch_interval_minutes = ?, default_environment = ?, color = ?, updated_at = ? WHERE id = ?",
     )
     .bind(slug)
     .bind(name)
@@ -446,13 +468,14 @@ pub async fn change(
     .bind(runner)
     .bind(fetch)
     .bind(&env)
+    .bind(&color)
     .bind(who.now)
     .bind(id)
     .execute(&mut *tx)
     .await?;
     let details = json!({"name": name, "slug": slug, "expose": expose, "idle_minutes": idle,
         "idle_never": never, "cpu_limit": cpu, "mem_limit_mb": mem, "runner": runner,
-        "fetch_interval_minutes": fetch, "default_environment": env, "by_device": who.by_device});
+        "fetch_interval_minutes": fetch, "default_environment": env, "color": color, "by_device": who.by_device});
     record(&mut tx, who.actor, "project.updated", id, details, true).await?;
     let p = get(&mut tx, id).await?;
     tx.commit().await?;
@@ -520,7 +543,9 @@ mod repos;
 pub use defaults::{Defaults, DefaultsChange, get as defaults, set as set_defaults};
 pub use github::{NewGithubRepo, create_from_github};
 use repos::add_repo_in;
-pub use repos::{add_repo, mirror, remove_repo, set_mirror, set_mirror_state, set_primary};
+pub use repos::{
+    add_repo, mirror, remove_repo, set_branch, set_mirror, set_mirror_state, set_primary,
+};
 
 #[cfg(test)]
 mod tests;

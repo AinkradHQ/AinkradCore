@@ -52,6 +52,11 @@ pub struct ProjectRun {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(required = false)]
     pub job: Option<String>,
+    /// How far the start got (API 110), on `GET /run` only: for a `starting` run, a `running`
+    /// one (all `done`) and a failed start (its step `failed`); absent otherwise. See `RunStep`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(required = false)]
+    pub steps: Option<Vec<super::run_progress::RunStep>>,
 }
 
 /// `idle` is the project's idle stop in minutes, `None` when it never stops for idleness.
@@ -72,6 +77,7 @@ fn view(r: Run, idle: Option<i64>) -> ProjectRun {
         config_id: r.config_id,
         environment: r.environment,
         job: None,
+        steps: None,
     }
 }
 
@@ -152,7 +158,11 @@ pub async fn status(State(app): State<App>, Path(id): Path<String>) -> ApiResult
     let run = store::latest(&app.pool, id)
         .await?
         .ok_or_else(|| ApiError::not_found("the project has never run"))?;
-    Ok(Json(shown(&app, run).await?))
+    let steps = super::run_progress::steps_now(&app, &run).await;
+    Ok(Json(ProjectRun {
+        steps,
+        ..shown(&app, run).await?
+    }))
 }
 
 #[utoipa::path(post, path = "/api/v1/projects/{id}/run/start", operation_id = "startProjectRun",

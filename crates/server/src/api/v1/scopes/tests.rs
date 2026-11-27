@@ -28,6 +28,20 @@ fn templates_match_whole_segments_only() {
     assert!(destructive(&m("DELETE"), "/api/v1/devices/d_x", &[]));
     assert!(!destructive(&m("GET"), "/api/v1/devices/d_x", &[]));
     assert!(!destructive(&m("DELETE"), "/api/v1/devices/d_x/y", &[]));
+    // `{path}` last is the rest of the path (the preview proxy), slashes and an empty rest included.
+    for path in [
+        "/api/v1/projects/7/preview/",
+        "/api/v1/projects/7/preview/a",
+        "/api/v1/projects/7/preview/a/b/c.js",
+    ] {
+        assert_eq!(required(&m("GET"), path, &[]), Some("read"), "{path}");
+        assert_eq!(required(&m("POST"), path, &[]), Some("admin"), "{path}");
+    }
+    assert_eq!(required(&m("GET"), "/api/v1/projects/7/preview", &[]), None);
+    assert_eq!(
+        required(&m("GET"), "/api/v1/projects/7/previewx/a", &[]),
+        None
+    );
 }
 
 /// Review M4, independent of the tables: every state-changing route whose scope is not `read` or
@@ -36,6 +50,36 @@ fn templates_match_whole_segments_only() {
 #[test]
 fn every_privileged_write_is_danger_unlocked_or_plain_with_a_reason() {
     const PLAIN: &[(&str, &str, &str)] = &[
+        (
+            "PATCH",
+            "/api/v1/projects/{id}/repos/{repo}",
+            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
+        ),
+        (
+            "POST",
+            "/api/v1/projects/{id}/preview/{path}",
+            "API 110: a request to the project's own running app, as its public link takes; nothing of the Core changes",
+        ),
+        (
+            "PUT",
+            "/api/v1/projects/{id}/preview/{path}",
+            "API 110: a request to the project's own running app, as its public link takes; nothing of the Core changes",
+        ),
+        (
+            "PATCH",
+            "/api/v1/projects/{id}/preview/{path}",
+            "API 110: a request to the project's own running app, as its public link takes; nothing of the Core changes",
+        ),
+        (
+            "DELETE",
+            "/api/v1/projects/{id}/preview/{path}",
+            "API 110: a request to the project's own running app, as its public link takes; nothing of the Core changes",
+        ),
+        (
+            "OPTIONS",
+            "/api/v1/projects/{id}/preview/{path}",
+            "API 110: a request to the project's own running app, as its public link takes; nothing of the Core changes",
+        ),
         (
             "PUT",
             "/api/v1/hardware/pause",

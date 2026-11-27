@@ -489,3 +489,51 @@ async fn a_run_resolves_secrets_by_the_projects_group_only() {
             .is_err()
     );
 }
+
+/// API 110: a service that falls over on a running run is an event with the service, its exit
+/// code and the restarts so far; a run that is stopped or lost is not.
+#[tokio::test]
+async fn a_crash_is_an_event_naming_the_service_and_its_exit_code() {
+    let fx = fx().await;
+    let link = Fake::new();
+    let (shop, blog) = (project(&fx, "shop").await, project(&fx, "blog").await);
+    let crashed = start(&fx, &link, shop).await.unwrap();
+    let lost = start(&fx, &link, blog).await.unwrap();
+    *link.listed.lock().unwrap() = Some(vec![RunInfo {
+        failed_service: Some("web".into()),
+        reason: Some("exited with 137".into()),
+        services: vec![ainkrad_proto::v2::ServiceStatus {
+            name: "web".into(),
+            state: "exited".into(),
+            exit_code: Some(137),
+            ports: vec![],
+        }],
+        ..info(&crashed, RunPhase::Failed)
+    }]);
+    runs::reconcile(&fx.app, &link, RUNNER).await;
+    assert_eq!(
+        run(&fx, &lost).await.stop_reason.as_deref(),
+        Some("runner_lost")
+    );
+    let events: Vec<String> = sqlx::query_scalar(
+        "SELECT payload FROM events WHERE kind = 'project.service_crashed' ORDER BY seq",
+    )
+    .fetch_all(&fx.app.pool)
+    .await
+    .unwrap();
+    assert_eq!(events.len(), 1, "{events:?}");
+    let e: serde_json::Value = serde_json::from_str(&events[0]).unwrap();
+    assert_eq!(e["id"], shop);
+    assert_eq!(e["run"], crashed.as_str());
+    assert_eq!(e["service"], "web");
+    assert_eq!(e["exit_code"], 137);
+    assert_eq!(e["restarts"], 0);
+    // Reconciling again does not say it twice: the run is over.
+    runs::reconcile(&fx.app, &link, RUNNER).await;
+    let n: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM events WHERE kind = 'project.service_crashed'")
+            .fetch_one(&fx.app.pool)
+            .await
+            .unwrap();
+    assert_eq!(n, 1);
+}

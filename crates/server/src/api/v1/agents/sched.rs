@@ -129,14 +129,16 @@ pub(super) async fn page(
     before: Option<i64>,
     limit: u32,
     run: Option<&str>,
+    project: Option<i64>,
 ) -> Result<Vec<Session>, ApiError> {
     let Some(run) = run else {
-        return Ok(crate::store::agents::list(&app.pool, before, limit).await?);
+        return Ok(crate::store::agents::list(&app.pool, before, limit, project).await?);
     };
     let mut out = Vec::new();
     for id in ch::ids_of_run(&app.pool, run, before, limit).await? {
         out.extend(crate::store::agents::get(&app.pool, &id).await?);
     }
+    out.retain(|s| project.is_none_or(|p| s.project_id == Some(p)));
     Ok(out)
 }
 

@@ -547,14 +547,15 @@ pub async fn create(
 #[utoipa::path(get, path = "/api/v1/agent-sessions", operation_id = "listAgentSessions",
     tag = "agents", params(Before),
     responses((status = 200, description = "Sessions, newest first (at most `limit`, 50 by \
-        default, 200 at most)", body = Vec<AgentSession>)))]
+        default, 200 at most); with `project`, only that project's (API 110)",
+        body = Vec<AgentSession>)))]
 pub async fn list(
     State(app): State<App>,
     Extension(me): Extension<Caller>,
     Query(q): Query<Before>,
 ) -> ApiResult<Vec<AgentSession>> {
     let limit = q.limit.unwrap_or(50).clamp(1, 200);
-    let all = page(&app, q.before, limit, q.run.as_deref()).await?;
+    let all = page(&app, q.before, limit, q.run.as_deref(), q.project).await?;
     Ok(Json(listed(&app, &me, all).await?))
 }
 

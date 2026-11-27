@@ -18,7 +18,7 @@ use axum::extract::DefaultBodyLimit;
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::middleware;
 use axum::response::{IntoResponse, Response};
-use axum::routing::{delete, get, post, put};
+use axum::routing::{any, delete, get, post, put};
 use serde::Deserialize;
 use utoipa::IntoParams;
 
@@ -513,7 +513,7 @@ pub fn router(app: App) -> Router {
         .route("/api/v1/projects/{id}/repos", post(projects::add_repo))
         .route(
             "/api/v1/projects/{id}/repos/{repo}",
-            delete(projects::remove_repo),
+            delete(projects::remove_repo).patch(projects::update_repo),
         )
         .route(
             "/api/v1/projects/{id}/repos/{repo}/primary",
@@ -530,6 +530,14 @@ pub fn router(app: App) -> Router {
         .route(
             "/api/v1/projects/{id}/run/spec/draft",
             post(projects::run_spec::draft),
+        )
+        .route(
+            "/api/v1/projects/{id}/preview/",
+            any(projects::preview::preview),
+        )
+        .route(
+            "/api/v1/projects/{id}/preview/{*path}",
+            any(projects::preview::preview),
         )
         .route("/api/v1/projects/{id}/run", get(projects::runs::status))
         .route(
@@ -605,6 +613,10 @@ pub fn router(app: App) -> Router {
         .route(
             "/api/v1/projects/{id}/run/services",
             get(projects::run_logs::services),
+        )
+        .route(
+            "/api/v1/projects/{id}/run/metrics",
+            get(projects::run_progress::metrics),
         )
         .route(
             "/api/v1/projects/{id}/run/logs",
