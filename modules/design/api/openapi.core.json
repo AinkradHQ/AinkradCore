@@ -1879,6 +1879,7 @@
           "design.doc.linked",
           "design.doc.resumed",
           "design.doc.taken_over",
+          "design.doc.unarchived",
           "design.doc.unlinked",
           "design.version.created",
           "design.version.restored",
@@ -2721,7 +2722,7 @@
       "ComposeView": {
         "properties": {
           "directions": {
-            "description": "The three directions, once `done`.",
+            "description": "The directions, once `done` (up to the count asked for; fewer when the AI drew fewer).",
             "items": {
               "$ref": "#/components/schemas/Direction"
             },
@@ -2729,6 +2730,13 @@
           },
           "doc": {
             "type": "string"
+          },
+          "flow": {
+            "description": "`true` when the drawing is a flow: one direction whose `screens` are linked in order.",
+            "type": [
+              "boolean",
+              "null"
+            ]
           },
           "id": {
             "type": "string"
@@ -2739,6 +2747,13 @@
           },
           "session": {
             "description": "The AI session doing the work (cancel it through the agent-session routes).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "stage": {
+            "description": "While working: `thinking` (nothing written yet), `drawing` (the AI is answering) or `placing` (the frames\nare being written).",
             "type": [
               "string",
               "null"
@@ -3735,7 +3750,7 @@
       "Direction": {
         "properties": {
           "frame": {
-            "description": "The node id of the frame drawn for it (set once `state` is `done`).",
+            "description": "The node id of the frame drawn for it (its first screen; set once `state` is `done`).",
             "type": [
               "string",
               "null"
@@ -3743,6 +3758,16 @@
           },
           "name": {
             "type": "string"
+          },
+          "screens": {
+            "description": "The node ids of every screen drawn for it, in order: one, or the screens of a flow (linked in order).",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
           },
           "summary": {
             "type": "string"
@@ -6114,10 +6139,10 @@
         "properties": {
           "brand": {
             "$ref": "#/components/schemas/Brand",
-            "description": "With `mode: \"system\"`: the brand kit to build the palette from."
+            "description": "The brand kit: with `mode: \"system\"` the palette is built from it; for screens its colours lead."
           },
           "count": {
-            "description": "How many directions to draw: 1 or 3 (default 3).",
+            "description": "How many directions to draw: 1 or 3 (default 3). An edit draws 1.",
             "format": "int32",
             "minimum": 0,
             "type": [
@@ -6125,8 +6150,15 @@
               "null"
             ]
           },
+          "frame": {
+            "description": "With `mode: \"edit\"`: the node id of the frame to change (400 when the doc has no such frame).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "mode": {
-            "description": "`screens` (default): draw frames. `system`: draw a design system's tokens on a `system` doc (no frames; `count`\nand `size` are ignored; `directions` holds one entry).",
+            "description": "`screens` (default): draw frames. `system`: draw a design system's tokens on a `system` doc (no frames; `count`\nand `size` are ignored; `directions` holds one entry). `edit`: redraw the frame `frame` with the change asked\nfor, keeping what it does not touch (one direction, a new frame beside the others).",
             "type": [
               "string",
               "null"
@@ -6138,7 +6170,7 @@
           },
           "size": {
             "$ref": "#/components/schemas/ComposeSize",
-            "description": "The screen size to draw at, each side 200 to 4000 points (default 360 x 630, a phone). To redraw an\nexisting frame, send its size."
+            "description": "The screen size to draw at, each side 200 to 4000 points (default 360 x 630, a phone; an edit defaults to the\nframe's own size)."
           }
         },
         "required": [
@@ -11307,7 +11339,7 @@
       "name": ""
     },
     "title": "Ainkrad Core",
-    "version": "1.108.0"
+    "version": "1.109.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -25827,6 +25859,26 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "At most this many, 1 to 500 (default 500)",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Skip this many first (default 0): the next page is `offset + limit`",
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
           }
         ],
         "responses": {
@@ -25841,7 +25893,7 @@
                 }
               }
             },
-            "description": "Library assets, newest first (at most 500); internal assets (shots, mockup files) are not listed"
+            "description": "Library assets, newest first (a page of at most `limit`; fewer than `limit` means the last page); internal assets (shots, mockup files) are not listed"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
@@ -26304,6 +26356,37 @@
     "/modules/design/v1/collections": {
       "get": {
         "operationId": "designListCollections",
+        "parameters": [
+          {
+            "description": "At most this many, 1 to 500 (default 500)",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Skip this many first (default 0): the next page is `offset + limit`",
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "`name` (default) or `updated` (newest change first)",
+            "in": "query",
+            "name": "sort",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -26316,7 +26399,7 @@
                 }
               }
             },
-            "description": "Collections by name"
+            "description": "Collections by name, or by last change with `sort=updated` (a page of at most `limit`; fewer than `limit` means the last page)"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
@@ -26845,6 +26928,35 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "At most this many, 1 to 500 (default 500)",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Skip this many first (default 0): the next page is `offset + limit`",
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "`name` (default) or `updated` (newest change first)",
+            "in": "query",
+            "name": "sort",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -26859,7 +26971,7 @@
                 }
               }
             },
-            "description": "Designs by name (at most 500)"
+            "description": "Designs by name, or by last change with `sort=updated` (a page of at most `limit`; fewer than `limit` means the last page)"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
@@ -27534,7 +27646,7 @@
                 }
               }
             },
-            "description": "An AI session is drawing three directions (`drawing`); read it with `designGetCompose` until `done` (the three frames are then on the canvas) or `failed`. 409 when the design is archived or a person took over, when no AI account is set up, or no runner is online; 400 for an empty or over-long prompt; 404 for no such design. Only `design` docs"
+            "description": "An AI session is drawing (`drawing`); read it with `designGetCompose` until `done` (the frames are then on the canvas) or `failed`. 409 when the design is archived or a person took over, when no AI account is set up, or no runner is online; 400 for an empty or over-long prompt, a bad mode, size or brand kit, or an edit of a frame the design does not have; 404 for no such design. Only `design` docs (and `system` docs for `mode: \"system\"`)"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
@@ -27596,7 +27708,7 @@
                 }
               }
             },
-            "description": "Where the drawing is. The first read that finds the AI session over writes the three frames (or fails with a reason: no answer, a bad answer, or a person took over); 404 for no such compose"
+            "description": "Where the drawing is. The first read that finds the AI session over writes the frames (or fails with a reason in plain words: the AI account's quota, rate limit or sign-in, no answer, a bad answer, or a person took over). A drawing still going after six minutes fails (`the AI stopped answering`) and its session is stopped; 404 for no such compose"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
@@ -28261,6 +28373,59 @@
               }
             },
             "description": "AI sessions are paused on this design: `designApply` answers `paused` until resume (audited as `design.doc.taken_over`); repeating changes nothing; an archived design is refused"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "design"
+        ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/modules/design/v1/docs/{doc}/unarchive": {
+      "post": {
+        "operationId": "designUnarchiveDoc",
+        "parameters": [
+          {
+            "description": "Design id",
+            "in": "path",
+            "name": "doc",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocView"
+                }
+              }
+            },
+            "description": "Active again, as it was (audited as `design.doc.unarchived`); unarchiving an active design changes nothing; 404 for no such design"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
