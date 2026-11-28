@@ -229,10 +229,12 @@ src/main/kotlin/ainkrad/client/models/PriceBookEntry.kt
 src/main/kotlin/ainkrad/client/models/ProjectChange.kt
 src/main/kotlin/ainkrad/client/models/ProjectChanges.kt
 src/main/kotlin/ainkrad/client/models/ProjectDefaults.kt
+src/main/kotlin/ainkrad/client/models/ProjectDeleted.kt
 src/main/kotlin/ainkrad/client/models/ProjectInfo.kt
 src/main/kotlin/ainkrad/client/models/ProjectRepo.kt
 src/main/kotlin/ainkrad/client/models/ProjectRoom.kt
 src/main/kotlin/ainkrad/client/models/ProjectRun.kt
+src/main/kotlin/ainkrad/client/models/ProjectRunStart.kt
 src/main/kotlin/ainkrad/client/models/ProjectSecretDeleted.kt
 src/main/kotlin/ainkrad/client/models/ProjectSecretInfo.kt
 src/main/kotlin/ainkrad/client/models/ProjectUsage.kt

@@ -1819,7 +1819,7 @@ export interface paths {
         get: operations["getProject"];
         put?: never;
         post?: never;
-        delete?: never;
+        delete: operations["deleteProject"];
         options?: never;
         head?: never;
         patch: operations["updateProject"];
@@ -2172,6 +2172,38 @@ export interface paths {
         put?: never;
         post?: never;
         delete: operations["deleteRunEnv"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/run-envs/{name}/env": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listRunEnvVars"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/run-envs/{name}/env/{key}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["setRunEnvVar"];
+        post?: never;
+        delete: operations["deleteRunEnvVar"];
         options?: never;
         head?: never;
         patch?: never;
@@ -5550,10 +5582,14 @@ export interface components {
             connection_id?: number | null;
             /** @description See `ProjectInfo.kind`; default `web`. 400 `bad_kind` for any other value (API 111). */
             kind?: string | null;
+            /** @description See `NewProject.kinds` (API 112). */
+            kinds?: string[] | null;
             /** @description Default: the first repo's name. */
             name?: string | null;
-            /** @description 1-10 repos as `owner/name`; the first is primary. */
+            /** @description 1-50 repos as `owner/name`; the first is primary. */
             repos: string[];
+            /** @description An existing Brain room to link instead of getting a new one (API 112); see `NewProject.room`. */
+            room?: string | null;
             /**
              * @description Default: made from the name; a taken or reserved one gets `-2`, `-3`, ... An explicit slug
              *     that is taken is 409 `conflict`.
@@ -5657,8 +5693,20 @@ export interface components {
             description?: string | null;
             /** @description See `ProjectInfo.kind`; default `web`. 400 `bad_kind` for any other value (API 111). */
             kind?: string | null;
+            /**
+             * @description Several kinds at once (API 112): at least one of `web`, `app`, `infra`, `other`, each once, `other`
+             *     only alone; `kind` becomes the first. 400 `bad_kind` otherwise. `kind` alone sets just it.
+             */
+            kinds?: string[] | null;
             /** @description One line, 1-100 characters. */
             name: string;
+            /**
+             * @description An existing Brain room to link to the new project instead of getting a new one (API 112).
+             *     It must exist (404 `not_found`) and be linked to no project (409 `room_linked`); 400 when
+             *     the Brain is off. Checked before anything is created; the link is made by the Brain when
+             *     it reads the `project.created` event, so there is no window for it to make its own room.
+             */
+            room?: string | null;
             /** @description `auto` (default), `this_mac` or `home_server`. */
             runner?: string | null;
             /** @description See `ProjectInfo.slug`; it is the project's public host name. */
@@ -6010,6 +6058,9 @@ export interface components {
              */
             mem_limit_mb: number;
         };
+        ProjectDeleted: {
+            deleted: boolean;
+        };
         ProjectInfo: {
             /**
              * @description The project's colour, one of the app's accents: `graphite`, `violet`, `blue`, `teal`,
@@ -6041,6 +6092,8 @@ export interface components {
              *     `other` (not software) (API 111).
              */
             kind?: string;
+            /** @description All of its kinds, the first being `kind` (API 112). */
+            kinds?: string[];
             /** Format: int64 */
             mem_limit_mb: number;
             name: string;
@@ -6052,6 +6105,12 @@ export interface components {
             runner?: string;
             /** @description A DNS label, 2-40 of `a-z0-9-`, starting with a letter; not a reserved name. */
             slug: string;
+            /**
+             * @description Why `PATCH` would refuse a new `slug` now (API 112): `running` (a run is live) or
+             *     `has_secrets` (the project holds secrets, whose stored names carry the slug); null when the
+             *     slug can be changed.
+             */
+            slug_locked?: string | null;
             /** @description `manual` or `github`. */
             source: string;
             /** @description `active` or `archived`. */
@@ -6113,6 +6172,14 @@ export interface components {
              */
             stop_reason?: string | null;
             stopped_at?: components["schemas"]["Timestamp"];
+        };
+        /** @description An optional body for `run/start`. */
+        ProjectRunStart: {
+            /**
+             * @description The run environment (API 112): its project-level variables (`…/run-envs/{name}/env`) are
+             *     laid over the spec's service. Default the project's `default_environment`, else its first.
+             */
+            environment?: string | null;
         };
         /** @description What a delete answers. */
         ProjectSecretDeleted: {
@@ -7466,6 +7533,11 @@ export interface components {
             idle_never?: boolean | null;
             /** @description See `ProjectInfo.kind`; 400 `bad_kind` for any other value (API 111). */
             kind?: string | null;
+            /**
+             * @description Several kinds at once (API 112): at least one of `web`, `app`, `infra`, `other`, each once, `other`
+             *     only alone; `kind` becomes the first. 400 `bad_kind` otherwise. `kind` alone sets just it.
+             */
+            kinds?: string[] | null;
             /**
              * Format: int64
              * @description Memory a run may use, 64 to 32768 MB.
@@ -12023,7 +12095,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Created as a manual project (audited and emitted as `project.created`). 400 `bad_request` for a bad or reserved slug or a bad name; 409 `conflict` when the slug is taken */
+            /** @description Created as a manual project (audited and emitted as `project.created`). 400 `bad_request` for a bad or reserved slug or a bad name; 409 `conflict` when the slug is taken; 404/409 `room_linked`/400 for a chosen `room` that is unknown, linked or without a Brain */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -12112,7 +12184,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Created with source `github` (audited and emitted as `project.created`), its repos added with GitHub's names and default branches, and the connection bound to it (scope `project`, audited `connection.bound`). 400 for a bad repo, name or slug; 404 for a repo the connection cannot see; 409 `conflict` for a taken explicit slug or a repeated repo, `no_connection` when none is set up */
+            /** @description Created with source `github` (audited and emitted as `project.created`), its repos added with GitHub's names and default branches, and the connection bound to it (scope `project`, audited `connection.bound`), all in one step: a repo that cannot be read leaves no project. 1-50 repos, read a few at a time. 400 for a bad repo, name or slug or more than 50 repos; 404 for a repo the connection cannot see; 409 `conflict` for a taken explicit slug or a repeated repo, `no_connection` when none is set up */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -12187,6 +12259,36 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProjectInfo"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    deleteProject: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project's id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted for good, with its repos and their copies, runs, run specs, configurations and environments, secrets, approval rules and command history; its AI sessions stay, no longer tied to it. `admin` and the app unlock (a deletion like any other); audited and emitted as `project.deleted` (the Brain drops the project's room link). 404 for no such project; 409 `project_running` while a run or task job of it is live; 409 `not_archived` unless it is archived (archive it first) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectDeleted"];
                 };
             };
             400: components["responses"]["BadRequest"];
@@ -13159,6 +13261,110 @@ export interface operations {
             500: components["responses"]["InternalError"];
         };
     };
+    listRunEnvVars: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project's id */
+                id: string;
+                /** @description The environment */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The environment's project-level variables by name, without values (they apply to a run of the project in that environment). 404 for no such project or environment */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunVar"][];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    setRunEnvVar: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project's id */
+                id: string;
+                /** @description The environment */
+                name: string;
+                /** @description The variable name */
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetRunVar"];
+            };
+        };
+        responses: {
+            /** @description Set or replaced (audited without the value). 400 `bad_request` for a bad name or value or neither/both; 400/409 `invalid_spec` when `secret` is not one of the project's; 409 `conflict` for an archived project; 409 `limit_reached` at 64; 404 for no such environment */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunVar"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    deleteRunEnvVar: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project's id */
+                id: string;
+                /** @description The environment */
+                name: string;
+                /** @description The variable name */
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted; 404 for no such variable or environment */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunConfigDeleted"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
     touchProjectRun: {
         parameters: {
             query?: never;
@@ -13411,9 +13617,13 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["ProjectRunStart"];
+            };
+        };
         responses: {
-            /** @description The run, `starting` (audited and emitted as `project.run_started`); it then becomes `running` or `failed`. 404 for no such project or no run spec; 409 `conflict` when the project is archived or already has a live run, 409 `no_runner` when no online runner can run projects */
+            /** @description The run, `starting` (audited and emitted as `project.run_started`); it then becomes `running` or `failed`. 404 for no such project or no run spec; 409 `conflict` when the project is archived or already has a live run, 409 `no_runner` when no online runner can run projects; 404 when `environment` is not one of the project's. The run records the environment */
             200: {
                 headers: {
                     [name: string]: unknown;

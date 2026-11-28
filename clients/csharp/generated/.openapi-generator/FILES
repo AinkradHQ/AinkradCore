@@ -237,10 +237,12 @@ src/Ainkrad.Client/Model/PriceBookEntry.cs
 src/Ainkrad.Client/Model/ProjectChange.cs
 src/Ainkrad.Client/Model/ProjectChanges.cs
 src/Ainkrad.Client/Model/ProjectDefaults.cs
+src/Ainkrad.Client/Model/ProjectDeleted.cs
 src/Ainkrad.Client/Model/ProjectInfo.cs
 src/Ainkrad.Client/Model/ProjectRepo.cs
 src/Ainkrad.Client/Model/ProjectRoom.cs
 src/Ainkrad.Client/Model/ProjectRun.cs
+src/Ainkrad.Client/Model/ProjectRunStart.cs
 src/Ainkrad.Client/Model/ProjectSecretDeleted.cs
 src/Ainkrad.Client/Model/ProjectSecretInfo.cs
 src/Ainkrad.Client/Model/ProjectUsage.cs

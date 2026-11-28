@@ -32,6 +32,7 @@ import kotlinx.serialization.Contextual
  * @param idleMinutes Idle stop, 5 to 1440 minutes.
  * @param idleNever Turn the idle stop off (true) or back on (false).
  * @param kind See `ProjectInfo.kind`; 400 `bad_kind` for any other value (API 111).
+ * @param kinds Several kinds at once (API 112): at least one of `web`, `app`, `infra`, `other`, each once, `other` only alone; `kind` becomes the first. 400 `bad_kind` otherwise. `kind` alone sets just it.
  * @param memLimitMb Memory a run may use, 64 to 32768 MB.
  * @param name 
  * @param runner Where it prefers to run: `auto`, `this_mac` or `home_server`.
@@ -74,6 +75,10 @@ data class UpdateProject (
     /* See `ProjectInfo.kind`; 400 `bad_kind` for any other value (API 111). */
     @SerialName(value = "kind")
     val kind: kotlin.String? = null,
+
+    /* Several kinds at once (API 112): at least one of `web`, `app`, `infra`, `other`, each once, `other` only alone; `kind` becomes the first. 400 `bad_kind` otherwise. `kind` alone sets just it. */
+    @SerialName(value = "kinds")
+    val kinds: kotlin.collections.List<kotlin.String>? = null,
 
     /* Memory a run may use, 64 to 32768 MB. */
     @SerialName(value = "mem_limit_mb")

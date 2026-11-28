@@ -23,17 +23,19 @@ import kotlinx.serialization.Contextual
 /**
  * 
  *
- * @param repos 1-10 repos as `owner/name`; the first is primary.
+ * @param repos 1-50 repos as `owner/name`; the first is primary.
  * @param connectionId Default: the workspace's GitHub default.
  * @param kind See `ProjectInfo.kind`; default `web`. 400 `bad_kind` for any other value (API 111).
+ * @param kinds See `NewProject.kinds` (API 112).
  * @param name Default: the first repo's name.
+ * @param room An existing Brain room to link instead of getting a new one (API 112); see `NewProject.room`.
  * @param slug Default: made from the name; a taken or reserved one gets `-2`, `-3`, ... An explicit slug that is taken is 409 `conflict`.
  */
 @Serializable
 
 data class NewGithubProject (
 
-    /* 1-10 repos as `owner/name`; the first is primary. */
+    /* 1-50 repos as `owner/name`; the first is primary. */
     @SerialName(value = "repos")
     val repos: kotlin.collections.List<kotlin.String>,
 
@@ -45,9 +47,17 @@ data class NewGithubProject (
     @SerialName(value = "kind")
     val kind: kotlin.String? = null,
 
+    /* See `NewProject.kinds` (API 112). */
+    @SerialName(value = "kinds")
+    val kinds: kotlin.collections.List<kotlin.String>? = null,
+
     /* Default: the first repo's name. */
     @SerialName(value = "name")
     val name: kotlin.String? = null,
+
+    /* An existing Brain room to link instead of getting a new one (API 112); see `NewProject.room`. */
+    @SerialName(value = "room")
+    val room: kotlin.String? = null,
 
     /* Default: made from the name; a taken or reserved one gets `-2`, `-3`, ... An explicit slug that is taken is 409 `conflict`. */
     @SerialName(value = "slug")
