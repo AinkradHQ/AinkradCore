@@ -82,6 +82,9 @@ const REQUEST_MAX: usize = 8 << 20;
 /// a token as the password.
 const ASKPASS: &str = "#!/bin/sh\ncase \"$1\" in\n  Username*) printf '%s\\n' x-access-token ;;\n  *) printf '%s\\n' \"$AINKRAD_GIT_TOKEN\" ;;\nesac\n";
 
+/// Fetches at once unless `AINKRAD_MIRROR_FETCHES` says otherwise.
+const FETCHES: usize = 2;
+
 pub struct Mirrors {
     root: PathBuf,
     git: PathBuf,
@@ -89,6 +92,9 @@ pub struct Mirrors {
     locks: Mutex<HashMap<i64, Arc<tokio::sync::Mutex<()>>>>,
     /// Pack streams in flight; the Core machine runs other things too.
     serving: Arc<Semaphore>,
+    /// Fetches running at once (`AINKRAD_MIRROR_FETCHES`, default [`FETCHES`]): a project made from
+    /// twenty repos starts twenty, and a small Core machine must still answer its other requests.
+    fetching: Arc<Semaphore>,
     /// Who may read which copy, until when (unix seconds) and for which project and remote (`key`);
     /// see `lease`.
     leases: Mutex<HashMap<(String, i64), (i64, String)>>,
@@ -147,6 +153,13 @@ impl Mirrors {
             timeout: Duration::from_secs(300),
             locks: Mutex::default(),
             serving: Arc::new(Semaphore::new(4)),
+            fetching: Arc::new(Semaphore::new(
+                std::env::var("AINKRAD_MIRROR_FETCHES")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .filter(|n| *n > 0)
+                    .unwrap_or(FETCHES),
+            )),
             leases: Mutex::default(),
         }
     }
@@ -660,6 +673,8 @@ async fn fetch(
     _one: OwnedMutexGuard<()>,
 ) -> Result<store::Mirror, Refused> {
     let db = |e: sqlx::Error| Refused::Db(e.to_string());
+    // Waiting for a turn holds nothing: no pool connection, only this repo's lock.
+    let _turn = mirrors.fetching.clone().acquire_owned().await;
     let t = target(&app.pool, repo)
         .await
         .map_err(db)?

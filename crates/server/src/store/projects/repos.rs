@@ -285,12 +285,21 @@ pub async fn set_mirror_state(
 }
 
 pub async fn mirror(pool: &SqlitePool, repo_id: i64) -> Result<Option<Mirror>, sqlx::Error> {
+    mirror_in(&mut *pool.acquire().await?, repo_id).await
+}
+
+/// [`mirror`] on a connection the caller already holds. Asking the pool for a second connection
+/// while holding one starves a small pool: a few such callers at once wait on each other.
+pub async fn mirror_in(
+    conn: &mut SqliteConnection,
+    repo_id: i64,
+) -> Result<Option<Mirror>, sqlx::Error> {
     let row = sqlx::query(
         "SELECT repo_id, head, fetched_at, error, state, reason, started_at \
          FROM core_project_mirrors WHERE repo_id = ?",
     )
     .bind(repo_id)
-    .fetch_optional(pool)
+    .fetch_optional(conn)
     .await?;
     row.map(|r| {
         Ok(Mirror {
