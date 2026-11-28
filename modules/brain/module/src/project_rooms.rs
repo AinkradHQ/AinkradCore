@@ -46,7 +46,7 @@ fn project_id(p: &str) -> Result<i64, ApiError> {
 
 /// Links `project` to `room` in the caller's write transaction. 409 `project_linked` or
 /// `room_linked` when either side already is (the table's two UNIQUE paths are the backstop).
-async fn link(conn: &mut SqliteConnection, project: &str, room: &str) -> Result<(), ApiError> {
+pub(crate) async fn link(conn: &mut SqliteConnection, project: &str, room: &str) -> Result<(), ApiError> {
     let by_project: i64 =
         sqlx::query_scalar("SELECT count(*) FROM brain_project_rooms WHERE project = ?")
             .bind(project)
@@ -336,13 +336,23 @@ pub(crate) async fn link_route(
 
 #[utoipa::path(delete, path = "/projects/{project}/room", operation_id = "brainUnlinkProjectRoom", tag = "brain",
     params(("project" = String, Path, description = "The Core project's id")),
-    responses((status = 200, description = "Unlinks the project; the room stays and can be linked to another project (audited as `brain.room.unlinked`). 404 when the project has no room", body = ProjectRoomLink)))]
+    responses((status = 200, description = "Unlinks the project; the room stays and can be linked to another project, unless the Brain made it for the project and it holds nothing (no records, no session claims): then it is archived (audited as `brain.room.unlinked`). 404 when the project has no room", body = ProjectRoomLink)))]
 pub(crate) async fn unlink_route(
     State(app): State<App>,
-    Extension(_b): Extension<Brain>,
+    Extension(b): Extension<Brain>,
     Path(project): Path<String>,
 ) -> ApiResult<ProjectRoomLink> {
     let id = project_id(&project)?.to_string();
+    // The Brain's own room, with nothing in it, is archived with the link; any other stays.
+    let linked: Option<String> =
+        sqlx::query_scalar("SELECT room FROM brain_project_rooms WHERE project = ?")
+            .bind(&id)
+            .fetch_optional(&app.pool)
+            .await?;
+    let archive = match &linked {
+        Some(room) => crate::project_deleted::made_for_and_empty(&app, &b, &id, room).await?,
+        None => false,
+    };
     let mut tx = begin_write(&app.pool).await?;
     let room: String =
         sqlx::query_scalar("DELETE FROM brain_project_rooms WHERE project = ? RETURNING room")
@@ -357,13 +367,19 @@ pub(crate) async fn unlink_route(
     record(
         &mut tx,
         "brain.room.unlinked",
-        json!({"project": id, "room": room}),
+        json!({"project": id, "room": room, "archived": archive}),
         Some((
             "brain.room",
             json!({"op": "unlinked", "project": id, "room": room}),
         )),
     )
     .await?;
+    if archive {
+        sqlx::query("UPDATE brain_rooms SET state = 'archived' WHERE id = ? AND state = 'active'")
+            .bind(&room)
+            .execute(&mut *tx)
+            .await?;
+    }
     tx.commit().await?;
     Ok(Json(ProjectRoomLink {
         project: id,
@@ -436,7 +452,8 @@ async fn make(app: &App, b: &Brain, id: i64, name: &str) -> Result<(), ApiError>
     Ok(())
 }
 
-/// Reads the `project.created` events after the cursor and gives each project its room.
+/// Reads the `project.created` and `project.deleted` events after the cursor: a new project gets
+/// its room, a deleted one loses its link.
 pub(crate) async fn step(app: &App, b: &Brain) -> Result<(), ApiError> {
     let from: i64 = sqlx::query_scalar("SELECT seq FROM brain_project_cursor")
         .fetch_optional(&app.pool)
@@ -446,11 +463,26 @@ pub(crate) async fn step(app: &App, b: &Brain) -> Result<(), ApiError> {
     let Some(last) = batch.last().map(|e| e.seq) else {
         return Ok(());
     };
-    for e in batch.iter().filter(|e| e.kind == "project.created") {
-        let (Some(id), Some(name)) = (e.payload["id"].as_i64(), e.payload["name"].as_str()) else {
-            continue;
-        };
-        make(app, b, id, name).await?;
+    for e in &batch {
+        match e.kind.as_str() {
+            "project.created" => {
+                let (Some(id), Some(name)) =
+                    (e.payload["id"].as_i64(), e.payload["name"].as_str())
+                else {
+                    continue;
+                };
+                match e.payload["room"].as_str() {
+                    Some(room) if crate::project_deleted::adopt(app, id, room).await? => {}
+                    _ => make(app, b, id, name).await?,
+                }
+            }
+            "project.deleted" => {
+                if let Some(id) = e.payload["id"].as_i64() {
+                    crate::project_deleted::forget(app, b, id).await?;
+                }
+            }
+            _ => {}
+        }
     }
     sqlx::query(
         "INSERT INTO brain_project_cursor (id, seq) VALUES (1, ?) \

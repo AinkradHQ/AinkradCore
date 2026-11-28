@@ -1,10 +1,10 @@
-//! A project made from GitHub repos (P2-01): the project, its repos (the first is primary) and the
-//! source `github`, in one transaction, so a bad repo leaves nothing behind. The slug is derived
+//! A project made from GitHub repos (P2-01): the project, its repos (the first is primary), its
+//! kind and the source `github`, in one transaction, so a bad repo leaves nothing behind. The slug is derived
 //! from the name; a taken or reserved one gets `-2`, `-3`, ... An explicit slug is used as given.
 
 use sqlx::sqlite::SqlitePool;
 
-use super::{Error, Project, Who, add_repo_in, create_in, line, refused, slug_problem};
+use super::{Error, Project, Who, add_repo_in, create_in, kinds_of, line, refused, slug_problem};
 use crate::store::connections::{Who as ConnWho, bindings};
 
 pub struct NewGithubRepo {
@@ -41,8 +41,13 @@ pub async fn create_from_github(
     repos: &[NewGithubRepo],
     who: Who<'_>,
     bind: Option<(i64, ConnWho<'_>)>,
+    (kinds, room): (Option<&[String]>, Option<&str>),
 ) -> Result<Project, Error> {
     line(name, 100, "a name")?;
+    let kinds = kinds
+        .map(|k| kinds_of(None, Some(k)))
+        .transpose()?
+        .flatten();
     if repos.is_empty() {
         return refused("bad_request", "name at least one repo");
     }
@@ -75,7 +80,17 @@ pub async fn create_from_github(
     if let Some(why) = slug_problem(&slug) {
         return refused("bad_request", why);
     }
-    let p = create_in(&mut tx, &slug, name, "", "github", who).await?;
+    let mut p = create_in(&mut tx, &slug, name, "", ("github", room), who).await?;
+    if let Some(ks) = kinds {
+        sqlx::query("UPDATE core_projects SET kind = ?, kinds = ? WHERE id = ?")
+            .bind(&ks[0])
+            .bind(ks.join(","))
+            .bind(p.id)
+            .execute(&mut *tx)
+            .await?;
+        p.kind.clone_from(&ks[0]);
+        p.kinds = ks;
+    }
     for (i, r) in repos.iter().enumerate() {
         let r = (
             r.name.as_str(),

@@ -419,6 +419,18 @@ pub static CORE_MIGRATIONS: &[Migration] = &[
         up: include_str!("../../../migrations/0069_project_kind.up.sql"),
         down: include_str!("../../../migrations/0069_project_kind.down.sql"),
     },
+    Migration {
+        version: 70,
+        name: "project_env_vars",
+        up: include_str!("../../../migrations/0070_project_env_vars.up.sql"),
+        down: include_str!("../../../migrations/0070_project_env_vars.down.sql"),
+    },
+    Migration {
+        version: 71,
+        name: "project_kinds",
+        up: include_str!("../../../migrations/0071_project_kinds.up.sql"),
+        down: include_str!("../../../migrations/0071_project_kinds.down.sql"),
+    },
 ];
 
 #[cfg(test)]

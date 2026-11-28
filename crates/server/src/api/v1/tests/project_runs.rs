@@ -190,7 +190,7 @@ async fn a_second_start_is_a_409_and_the_index_is_the_backstop() {
     let again = runs::begin_start(&fx.app, &link, p, w(&now)).await;
     assert_eq!(code(again.err().unwrap()), "conflict");
     // A racing writer that got past the check meets the unique index, also as `conflict`.
-    let raced = store::begin(&fx.app.pool, "r_other", p, 1, RUNNER, None, w(&now)).await;
+    let raced = store::begin(&fx.app.pool, "r_other", p, 1, RUNNER, None, None, w(&now)).await;
     assert_eq!(code(raced.err().unwrap()), "conflict");
     // Over HTTP: the same 409, before any runner is looked for.
     let r = send(

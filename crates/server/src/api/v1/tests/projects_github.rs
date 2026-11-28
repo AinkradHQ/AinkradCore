@@ -209,3 +209,81 @@ async fn a_replaced_credential_does_not_serve_the_old_cached_list() {
     assert_eq!(r["total"], 0);
     assert!(cx.gh.seen().len() > after_replace);
 }
+
+#[tokio::test]
+async fn a_big_project_is_one_call_and_a_failed_read_leaves_nothing() {
+    let (cx, _) = setup().await;
+    // Fifty-one is too many, before any GitHub call.
+    let before = cx.gh.seen().len();
+    let many: Vec<String> = (0..51).map(|i| format!("acme/r{i}")).collect();
+    let r = cx.admin(Method::POST, FROM, json!({"repos": many})).await;
+    assert_eq!(r.0, StatusCode::BAD_REQUEST, "{}", r.1);
+    assert_eq!(cx.gh.seen().len(), before, "GitHub was called");
+    // Twelve repos are read together and made in one go.
+    let names: Vec<String> = (0..12).map(|i| format!("acme/r{i}")).collect();
+    for i in 0..12 {
+        cx.gh.push(
+            200,
+            &[],
+            &repo("acme", &format!("r{i}"), "main").to_string(),
+        );
+    }
+    let p = cx
+        .ok(Method::POST, FROM, json!({"repos": names, "kind": "app"}))
+        .await;
+    assert_eq!(p["repos"].as_array().unwrap().len(), 12);
+    assert_eq!(p["kind"], "app");
+    let primaries = p["repos"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|r| r["is_primary"] == true);
+    assert_eq!(primaries.count(), 1);
+    // One of three cannot be read: no project, no repo rows, no binding.
+    let before: i64 = sqlx::query_scalar("SELECT count(*) FROM core_projects")
+        .fetch_one(&cx.fx.app.pool)
+        .await
+        .unwrap();
+    cx.gh.push(200, &[], &repo("acme", "a", "main").to_string());
+    cx.gh.push(404, &[], "{}");
+    cx.gh.push(200, &[], &repo("acme", "c", "main").to_string());
+    let r = cx
+        .admin(
+            Method::POST,
+            FROM,
+            json!({"repos": ["acme/a", "acme/b", "acme/c"]}),
+        )
+        .await;
+    assert_eq!(r.0, StatusCode::NOT_FOUND, "{}", r.1);
+    let after: i64 = sqlx::query_scalar("SELECT count(*) FROM core_projects")
+        .fetch_one(&cx.fx.app.pool)
+        .await
+        .unwrap();
+    assert_eq!(after, before);
+    cx.assert_clean().await;
+}
+
+#[tokio::test]
+async fn from_github_takes_several_kinds_all_or_nothing() {
+    let (cx, _) = setup().await;
+    let r = cx
+        .admin(
+            Method::POST,
+            FROM,
+            json!({"repos": ["acme/x"], "kinds": ["other", "web"]}),
+        )
+        .await;
+    assert_eq!(r.0, StatusCode::BAD_REQUEST, "{}", r.1);
+    cx.gh.push(200, &[], &repo("acme", "x", "main").to_string());
+    let p = cx
+        .ok(
+            Method::POST,
+            FROM,
+            json!({"repos": ["acme/x"], "kinds": ["app", "infra"]}),
+        )
+        .await;
+    assert_eq!(
+        (&p["kind"], &p["kinds"]),
+        (&json!("app"), &json!(["app", "infra"]))
+    );
+}

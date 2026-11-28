@@ -165,18 +165,36 @@ pub async fn status(State(app): State<App>, Path(id): Path<String>) -> ApiResult
     }))
 }
 
+/// An optional body for `run/start`.
+#[derive(Debug, Default, serde::Deserialize, ToSchema)]
+pub struct ProjectRunStart {
+    /// The run environment (API 112): its project-level variables (`…/run-envs/{name}/env`) are
+    /// laid over the spec's service. Default the project's `default_environment`, else its first.
+    pub environment: Option<String>,
+}
+
 #[utoipa::path(post, path = "/api/v1/projects/{id}/run/start", operation_id = "startProjectRun",
     tag = "projects", params(("id" = String, Path, description = "The project's id")),
+    request_body = Option<ProjectRunStart>,
     responses((status = 200, description = "The run, `starting` (audited and emitted as \
         `project.run_started`); it then becomes `running` or `failed`. 404 for no such project \
         or no run spec; 409 `conflict` when the project is archived or already has a live run, \
-        409 `no_runner` when no online runner can run projects", body = ProjectRun)))]
+        409 `no_runner` when no online runner can run projects; 404 when `environment` is not one \
+        of the project's. The run records the environment", body = ProjectRun)))]
 pub async fn start(
     State(app): State<App>,
     Extension(me): Extension<Caller>,
     Path(id): Path<String>,
+    body: Option<Json<ProjectRunStart>>,
 ) -> ApiResult<ProjectRun> {
-    Ok(Json(start_now(&app, &me, num(&id, "project")?).await?))
+    let b = body.map(|Json(b)| b).unwrap_or_default();
+    let opts = StartOpts {
+        config: None,
+        environment: b.environment,
+    };
+    Ok(Json(
+        start_opts(&app, &me, num(&id, "project")?, &opts).await?,
+    ))
 }
 
 #[utoipa::path(post, path = "/api/v1/projects/{id}/run/stop", operation_id = "stopProjectRun",

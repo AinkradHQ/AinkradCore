@@ -1,13 +1,14 @@
 //! Projects over the API (Core 0.9, P1-02; store `store::projects`). Reading is `read`; creating,
 //! changing, archiving and every repo change is `admin` and destructive (a step-up): a project
-//! decides which remotes the Core fetches and which repos a session gets. A project is archived,
-//! never deleted. A repo's mirror state (the Core's copy: head, fetched at, last error) is
+//! decides which remotes the Core fetches and which repos a session gets. A project is archived
+//! first; deleting it for good (`DELETE`) takes an archived one. A repo's mirror state (the Core's copy: head, fetched at, last error) is
 //! read-only here; the mirror scheduler writes it (P3-01). Every remote goes through
 //! `repo_url_problem` here and again in the store, so no credential or odd scheme gets in.
 
 pub mod insight;
 pub mod preview;
 pub mod run_configs;
+pub mod run_env_vars;
 pub mod run_logs;
 pub mod run_progress;
 pub mod run_spec;
@@ -129,6 +130,14 @@ pub struct ProjectInfo {
     /// `other` (not software) (API 111).
     #[schema(required = false)]
     pub kind: String,
+    /// All of its kinds, the first being `kind` (API 112).
+    #[schema(required = false)]
+    pub kinds: Vec<String>,
+    /// Why `PATCH` would refuse a new `slug` now (API 112): `running` (a run is live) or
+    /// `has_secrets` (the project holds secrets, whose stored names carry the slug); null when the
+    /// slug can be changed.
+    #[schema(required = false)]
+    pub slug_locked: Option<String>,
     /// The primary repo first, then by name.
     pub repos: Vec<ProjectRepo>,
     /// The linked Brain room; null when the Brain is off or the project has none.
@@ -141,7 +150,7 @@ pub(super) async fn info(app: &App, p: Project) -> Result<ProjectInfo, ApiError>
     let mut conn = app.pool.acquire().await?;
     let mut repos = Vec::new();
     for r in store::repos(&mut conn, p.id).await? {
-        let m = store::mirror(&app.pool, r.id).await?;
+        let m = store::mirror_in(&mut conn, r.id).await?;
         repos.push(ProjectRepo::new(r, m));
     }
     // The link is a Brain table: without the Brain module there is no table and no room.
@@ -161,6 +170,20 @@ pub(super) async fn info(app: &App, p: Project) -> Result<ProjectInfo, ApiError>
         .await?
         .map(|(room_id, name)| ProjectRoom { room_id, name }),
     };
+    let (live, secrets): (i64, i64) = sqlx::query_as(
+        "SELECT (SELECT count(*) FROM core_project_runs WHERE project_id = ?1 \
+                 AND state IN ('starting', 'running', 'stopping')), \
+                (SELECT count(*) FROM core_secrets WHERE group_id = ?2)",
+    )
+    .bind(p.id)
+    .bind(p.secret_group)
+    .fetch_one(&mut *conn)
+    .await?;
+    let slug_locked = match (live > 0, secrets > 0) {
+        (true, _) => Some("running".to_owned()),
+        (_, true) => Some("has_secrets".to_owned()),
+        _ => None,
+    };
     Ok(ProjectInfo {
         id: p.id,
         slug: p.slug,
@@ -178,6 +201,8 @@ pub(super) async fn info(app: &App, p: Project) -> Result<ProjectInfo, ApiError>
         default_environment: p.default_environment.clone(),
         color: p.color.clone(),
         kind: p.kind.clone(),
+        kinds: p.kinds.clone(),
+        slug_locked,
         repos,
         room,
         created_at: ts(&p.created_at),
@@ -254,38 +279,84 @@ pub struct NewProject {
     /// See `ProjectInfo.kind`; default `web`. 400 `bad_kind` for any other value (API 111).
     #[schema(required = false)]
     pub kind: Option<String>,
+    /// Several kinds at once (API 112): at least one of `web`, `app`, `infra`, `other`, each once, `other`
+    /// only alone; `kind` becomes the first. 400 `bad_kind` otherwise. `kind` alone sets just it.
+    #[schema(required = false)]
+    pub kinds: Option<Vec<String>>,
+    /// An existing Brain room to link to the new project instead of getting a new one (API 112).
+    /// It must exist (404 `not_found`) and be linked to no project (409 `room_linked`); 400 when
+    /// the Brain is off. Checked before anything is created; the link is made by the Brain when
+    /// it reads the `project.created` event, so there is no window for it to make its own room.
+    #[schema(required = false)]
+    pub room: Option<String>,
+}
+
+/// A room chosen at create: it must exist and be unlinked, checked before anything is made.
+pub(super) async fn check_room(app: &App, room: Option<&str>) -> Result<(), ApiError> {
+    let Some(room) = room else { return Ok(()) };
+    let brain: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM sqlite_master WHERE type = 'table' \
+         AND name IN ('brain_rooms', 'brain_project_rooms')",
+    )
+    .fetch_one(&app.pool)
+    .await?;
+    if brain < 2 {
+        return Err(ApiError::bad_request(
+            "the Brain is off, so there are no rooms",
+        ));
+    }
+    let known: i64 = sqlx::query_scalar("SELECT count(*) FROM brain_rooms WHERE id = ?")
+        .bind(room)
+        .fetch_one(&app.pool)
+        .await?;
+    if known == 0 {
+        return Err(ApiError::not_found("no such room"));
+    }
+    let linked: i64 = sqlx::query_scalar("SELECT count(*) FROM brain_project_rooms WHERE room = ?")
+        .bind(room)
+        .fetch_one(&app.pool)
+        .await?;
+    if linked > 0 {
+        return Err(ApiError::new(
+            axum::http::StatusCode::CONFLICT,
+            "room_linked",
+            "that room is linked to a project already",
+        ));
+    }
+    Ok(())
 }
 
 #[utoipa::path(post, path = "/api/v1/projects", operation_id = "createProject", tag = "projects",
     request_body = NewProject,
     responses((status = 200, description = "Created as a manual project (audited and emitted as \
         `project.created`). 400 `bad_request` for a bad or reserved slug or a bad name; 409 \
-        `conflict` when the slug is taken", body = ProjectInfo)))]
+        `conflict` when the slug is taken; 404/409 `room_linked`/400 for a chosen `room` that is \
+        unknown, linked or without a Brain", body = ProjectInfo)))]
 pub async fn create(
     State(app): State<App>,
     Extension(me): Extension<Caller>,
     Json(b): Json<NewProject>,
 ) -> ApiResult<ProjectInfo> {
     let now = app.clock.now();
-    if let Some(k) = &b.kind {
-        store::kind_ok(k)?;
-    }
-    let p = store::create(
+    let kinds = store::kinds_of(b.kind.as_deref(), b.kinds.as_deref())?;
+    check_room(&app, b.room.as_deref()).await?;
+    let p = store::create_with_room(
         &app.pool,
         &b.slug,
         &b.name,
         b.description.as_deref().unwrap_or(""),
         "manual",
+        b.room.as_deref(),
         who(&me, &now),
     )
     .await?;
-    let p = match (b.runner.as_deref(), b.color.as_deref(), b.kind.as_deref()) {
+    let p = match (b.runner.as_deref(), b.color.as_deref(), kinds.as_deref()) {
         (None, None, None) => p,
-        (runner, color, kind) => {
+        (runner, color, kinds) => {
             let c = store::Change {
                 runner,
                 color,
-                kind,
+                kinds,
                 ..store::Change::default()
             };
             store::change(&app.pool, p.id, &c, who(&me, &now)).await?
@@ -324,6 +395,10 @@ pub struct UpdateProject {
     /// See `ProjectInfo.kind`; 400 `bad_kind` for any other value (API 111).
     #[schema(required = false)]
     pub kind: Option<String>,
+    /// Several kinds at once (API 112): at least one of `web`, `app`, `infra`, `other`, each once, `other`
+    /// only alone; `kind` becomes the first. 400 `bad_kind` otherwise. `kind` alone sets just it.
+    #[schema(required = false)]
+    pub kinds: Option<Vec<String>>,
 }
 
 #[utoipa::path(patch, path = "/api/v1/projects/{id}", operation_id = "updateProject",
@@ -353,6 +428,7 @@ pub async fn update(
         default_environment: b.default_environment.as_deref(),
         color: b.color.as_deref(),
         kind: b.kind.as_deref(),
+        kinds: b.kinds.as_deref(),
     };
     let p = store::change(&app.pool, num(&id, "project")?, &c, who(&me, &now)).await?;
     Ok(Json(info(&app, p).await?))
@@ -371,6 +447,39 @@ pub async fn archive(
     let now = app.clock.now();
     let p = store::archive(&app.pool, num(&id, "project")?, who(&me, &now)).await?;
     Ok(Json(info(&app, p).await?))
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ProjectDeleted {
+    pub deleted: bool,
+}
+
+#[utoipa::path(delete, path = "/api/v1/projects/{id}", operation_id = "deleteProject",
+    tag = "projects", params(("id" = String, Path, description = "The project's id")),
+    responses((status = 200, description = "Deleted for good, with its repos and their copies, \
+        runs, run specs, configurations and environments, secrets, approval rules and command \
+        history; its AI sessions stay, no longer tied to it. `admin` and the app unlock (a deletion like any other); \
+        audited and emitted as `project.deleted` (the Brain drops the project's room link). 404 \
+        for no such project; 409 `project_running` while a run or task job of it is live; 409 \
+        `not_archived` unless it is archived (archive it first)", body = ProjectDeleted)))]
+pub async fn delete(
+    State(app): State<App>,
+    Extension(me): Extension<Caller>,
+    Path(id): Path<String>,
+) -> ApiResult<ProjectDeleted> {
+    let now = app.clock.now();
+    let repos = store::delete(&app.pool, num(&id, "project")?, who(&me, &now)).await?;
+    // The Core's copies go with the repos (a repo id can be handed out again), in a task a dropped
+    // request cannot cancel.
+    if let Some(mirrors) = app.mirrors.clone() {
+        let _ = tokio::spawn(async move {
+            for repo in repos {
+                mirrors.forget(repo).await;
+            }
+        })
+        .await;
+    }
+    Ok(Json(ProjectDeleted { deleted: true }))
 }
 
 #[utoipa::path(post, path = "/api/v1/projects/{id}/unarchive", operation_id = "unarchiveProject",

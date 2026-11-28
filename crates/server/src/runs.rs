@@ -304,7 +304,7 @@ pub async fn begin_start(
 #[derive(Debug, Default, Clone)]
 pub struct StartOpts {
     pub config: Option<i64>,
-    /// The environment; default the project's first.
+    /// The environment; default the project's `default_environment`, else its first.
     pub environment: Option<String>,
 }
 
@@ -326,31 +326,43 @@ pub async fn begin_start_with(
         return refused("conflict", "that run is already live");
     }
     let mut spec = run_specs::latest(&app.pool, project_id).await?;
-    let mut used = None;
     let mut wanted_runner = None;
-    if let Some(cid) = opts.config {
-        let cfg = run_configs::get(&app.pool, project_id, cid).await?;
-        let envs = run_configs::environments(&app.pool, project_id).await?;
-        let env = match &opts.environment {
-            Some(e) if envs.contains(e) => e.clone(),
-            Some(_) => return refused("not_found", "no such environment"),
-            None => envs.first().cloned().unwrap_or_default(),
-        };
-        let vars = run_configs::vars(&app.pool, cid, &env).await?;
-        run_configs::overlay(&mut spec.spec, &cfg, &vars).map_err(|why| Error::Refused {
-            code: "invalid_spec",
-            message: why,
-        })?;
+    // The environment: the one named, else the project's default, else its first. Its project-level
+    // variables go over the spec's service; a configuration's own variables go over those.
+    let envs = run_configs::environments(&app.pool, project_id).await?;
+    let env = match &opts.environment {
+        Some(e) if envs.contains(e) => e.clone(),
+        Some(_) => return refused("not_found", "no such environment"),
+        None => project
+            .default_environment
+            .clone()
+            .filter(|e| envs.contains(e))
+            .or_else(|| envs.first().cloned())
+            .unwrap_or_default(),
+    };
+    let mut vars = run_configs::project_vars(&app.pool, project_id, &env).await?;
+    let invalid = |why| Error::Refused {
+        code: "invalid_spec",
+        message: why,
+    };
+    match opts.config {
+        Some(cid) => {
+            let cfg = run_configs::get(&app.pool, project_id, cid).await?;
+            vars.extend(run_configs::vars(&app.pool, cid, &env).await?);
+            run_configs::overlay(&mut spec.spec, &cfg, &vars).map_err(invalid)?;
+            if cfg.runner != "automatic" {
+                wanted_runner = Some(cfg.runner.clone());
+            }
+        }
+        None => run_configs::lay_vars(&mut spec.spec, &vars).map_err(invalid)?,
+    }
+    if opts.config.is_some() || !vars.is_empty() {
         project_secrets::check_refs(
             &mut *app.pool.acquire().await?,
             &project,
             &spec::secret_refs(&spec.spec),
         )
         .await?;
-        if cfg.runner != "automatic" {
-            wanted_runner = Some(cfg.runner.clone());
-        }
-        used = Some((cid, env));
     }
     let load = runs::load(&app.pool).await?;
     // Prefer a runner every referenced secret may be leased to; load breaks the tie.
@@ -406,7 +418,8 @@ pub async fn begin_start_with(
         project_id,
         spec.version,
         &runner,
-        used.as_ref().map(|(c, e)| (*c, e.as_str())),
+        opts.config,
+        Some(&env),
         who,
     )
     .await?;
@@ -832,7 +845,10 @@ pub async fn sweep(app: &App, link: &dyn Link) {
                 let Ok(mut conn) = app.pool.acquire().await else {
                     continue;
                 };
-                let Ok(p) = projects::get(&mut conn, r.project_id).await else {
+                let got = projects::get(&mut conn, r.project_id).await;
+                // Not held across the stop below, which talks to a runner.
+                drop(conn);
+                let Ok(p) = got else {
                     continue;
                 };
                 let last = r.last_activity_at.as_deref().unwrap_or(&r.started_at);
