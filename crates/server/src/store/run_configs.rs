@@ -221,11 +221,11 @@ pub fn diff(a: &[Var], b: &[Var]) -> Vec<(String, Change)> {
 /// The service a configuration is laid over: the one it names; else the first that mounts or
 /// builds from a repo (it is the project's own code), else the first. `None` for no service.
 pub fn target(spec: &RunSpec, cfg: &Config) -> Option<String> {
-    if let Some(s) = cfg
-        .service
-        .as_ref()
-        .filter(|s| spec.services.contains_key(*s))
-    {
+    target_of(spec, cfg.service.as_ref())
+}
+
+fn target_of(spec: &RunSpec, service: Option<&String>) -> Option<String> {
+    if let Some(s) = service.filter(|s| spec.services.contains_key(*s)) {
         return Some(s.clone());
     }
     spec.services
@@ -261,6 +261,13 @@ pub fn overlay(spec: &mut RunSpec, cfg: &Config, vars: &[Var]) -> Result<(), Str
             expose: false,
         });
     }
+    put_vars(s, vars)?;
+    spec::validate(spec)
+}
+
+/// Each variable becomes an environment entry of the service (a secret as `${secret:NAME}`); a later
+/// one with the same key wins.
+fn put_vars(s: &mut spec::Service, vars: &[Var]) -> Result<(), String> {
     for v in vars {
         let val = match (&v.value, &v.secret) {
             (Some(x), None) => x.clone(),
@@ -269,6 +276,17 @@ pub fn overlay(spec: &mut RunSpec, cfg: &Config, vars: &[Var]) -> Result<(), Str
         };
         s.env.insert(v.key.clone(), val);
     }
+    Ok(())
+}
+
+/// Lays the environment's project-level `vars` over the spec's [`target`] service, for a start with
+/// no run configuration (the spec itself is not otherwise changed). No variables, no change.
+pub fn lay_vars(spec: &mut RunSpec, vars: &[Var]) -> Result<(), String> {
+    if vars.is_empty() {
+        return Ok(());
+    }
+    let name = target_of(spec, None).ok_or("the project's run spec has no service")?;
+    put_vars(spec.services.get_mut(&name).ok_or("no such service")?, vars)?;
     spec::validate(spec)
 }
 
@@ -356,6 +374,11 @@ pub async fn delete_environment(
     .bind(project)
     .execute(&mut *tx)
     .await?;
+    sqlx::query("DELETE FROM core_run_env_vars WHERE project_id = ? AND env = ?")
+        .bind(project)
+        .bind(name)
+        .execute(&mut *tx)
+        .await?;
     sqlx::query("DELETE FROM core_run_envs WHERE project_id = ? AND name = ?")
         .bind(project)
         .bind(name)
@@ -854,6 +877,9 @@ pub async fn reveal(
         ),
     }
 }
+
+mod project_vars;
+pub use project_vars::{delete_project_var, project_vars, set_project_var};
 
 #[cfg(test)]
 mod tests;

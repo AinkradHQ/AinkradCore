@@ -306,7 +306,16 @@ async fn a_refused_binding_leaves_no_project() {
         now: NOW,
     };
     // No such connection: the binding is refused inside the transaction.
-    let r = create_from_github(&fx.pool, None, "Shop", &repos, W, Some((999, cw))).await;
+    let r = create_from_github(
+        &fx.pool,
+        None,
+        "Shop",
+        &repos,
+        W,
+        Some((999, cw)),
+        (None, None),
+    )
+    .await;
     assert_eq!(code(r), "not_found");
     assert!(list(&fx.pool, false).await.unwrap().is_empty());
     assert!(list(&fx.pool, true).await.unwrap().is_empty());

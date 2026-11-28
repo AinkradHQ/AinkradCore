@@ -159,3 +159,114 @@ async fn a_project_room_made_before_the_brain_key_gets_its_file_on_first_open() 
     assert_eq!(s, StatusCode::OK, "{v}");
     assert!(file.exists());
 }
+
+#[tokio::test]
+async fn a_deleted_project_drops_its_link_and_its_empty_made_room_is_archived() {
+    let fx = fx().await;
+    start(&fx).await;
+    let made = project(&fx, "gone", "Gone").await;
+    let hand = project(&fx, "hand", "Hand").await;
+    let theirs = committed_room(&fx, &[("A", "alpha text")]).await;
+    assert_eq!(link(&fx, hand, &theirs).await.0, StatusCode::OK);
+    fx.brain.project_rooms_step().await.unwrap();
+    let made_room = get_project(&fx, made).await["room"]["room_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let now = fx.app.clock.now();
+    let who = Who {
+        by_device: &fx.admin.id,
+        actor: AuditActor::System,
+        now: &now,
+    };
+    for id in [made, hand] {
+        projects::archive(&fx.app.pool, id, who).await.unwrap();
+        projects::delete(&fx.app.pool, id, who).await.unwrap();
+    }
+    fx.brain.project_rooms_step().await.unwrap();
+    let state = |room: String| {
+        let pool = fx.app.pool.clone();
+        async move {
+            sqlx::query_scalar::<_, String>("SELECT state FROM brain_rooms WHERE id = ?")
+                .bind(room)
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+        }
+    };
+    let links: i64 = sqlx::query_scalar("SELECT count(*) FROM brain_project_rooms")
+        .fetch_one(&fx.app.pool)
+        .await
+        .unwrap();
+    assert_eq!(links, 0);
+    assert_eq!(state(made_room).await, "archived", "made for it and empty");
+    assert_eq!(state(theirs).await, "active", "linked by hand: kept");
+}
+
+#[tokio::test]
+async fn a_project_made_with_a_chosen_room_links_it_and_gets_no_room_of_its_own() {
+    let fx = fx().await;
+    let chosen = committed_room(&fx, &[("A", "alpha text")]).await;
+    let rooms = |fx: &Fx| {
+        let pool = fx.app.pool.clone();
+        async move {
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM brain_rooms")
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+        }
+    };
+    let before = rooms(&fx).await;
+    let now = fx.app.clock.now();
+    let who = Who {
+        by_device: &fx.admin.id,
+        actor: AuditActor::System,
+        now: &now,
+    };
+    let p = projects::create_with_room(&fx.app.pool, "mine", "Mine", "", "manual", Some(&chosen), who)
+        .await
+        .unwrap()
+        .id;
+    fx.brain.project_rooms_step().await.unwrap();
+    assert_eq!(get_project(&fx, p).await["room"]["room_id"], chosen);
+    assert_eq!(rooms(&fx).await, before, "no room of its own");
+    // A chosen room that was linked elsewhere meanwhile: the project gets its own, as before.
+    let other = project(&fx, "other", "Other").await;
+    assert_eq!(link(&fx, other, &committed_room_named(&fx, "Beta", &[("B", "beta text")]).await).await.0, StatusCode::OK);
+    let taken = get_project(&fx, other).await["room"]["room_id"].as_str().unwrap().to_owned();
+    let q = projects::create_with_room(&fx.app.pool, "late", "Late", "", "manual", Some(&taken), who)
+        .await
+        .unwrap()
+        .id;
+    fx.brain.project_rooms_step().await.unwrap();
+    let got = get_project(&fx, q).await;
+    assert!(got["room"]["room_id"].is_string() && got["room"]["room_id"] != taken.as_str());
+}
+
+#[tokio::test]
+async fn unlinking_the_brains_own_empty_room_archives_it_and_a_chosen_one_stays() {
+    let fx = fx().await;
+    start(&fx).await;
+    let made = project(&fx, "auto", "Auto").await;
+    fx.brain.project_rooms_step().await.unwrap();
+    let room = get_project(&fx, made).await["room"]["room_id"].as_str().unwrap().to_owned();
+    let (s, _) = call(&fx, &fx.admin, Method::DELETE, &format!("/projects/{made}/room"), None).await;
+    assert_eq!(s, StatusCode::OK);
+    let state = |r: String| {
+        let pool = fx.app.pool.clone();
+        async move {
+            sqlx::query_scalar::<_, String>("SELECT state FROM brain_rooms WHERE id = ?")
+                .bind(r)
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+        }
+    };
+    assert_eq!(state(room).await, "archived");
+    let chosen = committed_room(&fx, &[("A", "alpha text")]).await;
+    let mine = project(&fx, "mine", "Mine").await;
+    assert_eq!(link(&fx, mine, &chosen).await.0, StatusCode::OK);
+    let (s, _) = call(&fx, &fx.admin, Method::DELETE, &format!("/projects/{mine}/room"), None).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(state(chosen).await, "active");
+}

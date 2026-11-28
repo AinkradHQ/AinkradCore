@@ -130,9 +130,18 @@ pub(super) async fn running(fx: &Fx, slug: &str) -> i64 {
         .await
         .unwrap();
     let id = format!("r_{slug}");
-    store::begin(&fx.app.pool, &id, p.id, v.version, "r1", None, w(&now))
-        .await
-        .unwrap();
+    store::begin(
+        &fx.app.pool,
+        &id,
+        p.id,
+        v.version,
+        "r1",
+        None,
+        None,
+        w(&now),
+    )
+    .await
+    .unwrap();
     assert!(store::mark_running(&fx.app.pool, &id, &now).await.unwrap());
     p.id
 }

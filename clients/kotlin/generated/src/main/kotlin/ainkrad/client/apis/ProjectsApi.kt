@@ -28,8 +28,10 @@ import ainkrad.client.models.NewRunEnv
 import ainkrad.client.models.NewRunSpec
 import ainkrad.client.models.ProjectChanges
 import ainkrad.client.models.ProjectDefaults
+import ainkrad.client.models.ProjectDeleted
 import ainkrad.client.models.ProjectInfo
 import ainkrad.client.models.ProjectRun
+import ainkrad.client.models.ProjectRunStart
 import ainkrad.client.models.ProjectSecretDeleted
 import ainkrad.client.models.ProjectSecretInfo
 import ainkrad.client.models.ProjectUsage
@@ -272,6 +274,40 @@ import io.ktor.http.ParametersBuilder
             }
 
         /**
+        * DELETE /api/v1/projects/{id}
+        * 
+        * 
+         * @param id The project&#39;s id 
+         * @return ProjectDeleted
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun deleteProject(id: kotlin.String): HttpResponse<ProjectDeleted> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = 
+                    io.ktor.client.utils.EmptyContent
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.DELETE,
+            "/api/v1/projects/{id}".replace("{" + "id" + "}", "$id"),
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return request(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
         * DELETE /api/v1/projects/{id}/secrets/{name}
         * 
         * 
@@ -366,6 +402,42 @@ import io.ktor.http.ParametersBuilder
             val localVariableConfig = RequestConfig<kotlin.Any?>(
             RequestMethod.DELETE,
             "/api/v1/projects/{id}/run-envs/{name}".replace("{" + "id" + "}", "$id").replace("{" + "name" + "}", "$name"),
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return request(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
+        * DELETE /api/v1/projects/{id}/run-envs/{name}/env/{key}
+        * 
+        * 
+         * @param id The project&#39;s id 
+         * @param name The environment 
+         * @param key The variable name 
+         * @return RunConfigDeleted
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun deleteRunEnvVar(id: kotlin.String, name: kotlin.String, key: kotlin.String): HttpResponse<RunConfigDeleted> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = 
+                    io.ktor.client.utils.EmptyContent
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.DELETE,
+            "/api/v1/projects/{id}/run-envs/{name}/env/{key}".replace("{" + "id" + "}", "$id").replace("{" + "name" + "}", "$name").replace("{" + "key" + "}", "$key"),
             query = localVariableQuery,
             headers = localVariableHeaders,
             requiresAuthentication = true,
@@ -1232,6 +1304,41 @@ import io.ktor.http.ParametersBuilder
             }
 
         /**
+        * GET /api/v1/projects/{id}/run-envs/{name}/env
+        * 
+        * 
+         * @param id The project&#39;s id 
+         * @param name The environment 
+         * @return kotlin.collections.List<RunVar>
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun listRunEnvVars(id: kotlin.String, name: kotlin.String): HttpResponse<kotlin.collections.List<RunVar>> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = 
+                    io.ktor.client.utils.EmptyContent
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.GET,
+            "/api/v1/projects/{id}/run-envs/{name}/env".replace("{" + "id" + "}", "$id").replace("{" + "name" + "}", "$name"),
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return request(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
         * GET /api/v1/projects/{id}/run-envs
         * 
         * 
@@ -1579,6 +1686,42 @@ import io.ktor.http.ParametersBuilder
             }
 
         /**
+        * PUT /api/v1/projects/{id}/run-envs/{name}/env/{key}
+        * 
+        * 
+         * @param id The project&#39;s id 
+         * @param name The environment 
+         * @param key The variable name 
+         * @param setRunVar  
+         * @return RunVar
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun setRunEnvVar(id: kotlin.String, name: kotlin.String, key: kotlin.String, setRunVar: SetRunVar): HttpResponse<RunVar> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = setRunVar
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.PUT,
+            "/api/v1/projects/{id}/run-envs/{name}/env/{key}".replace("{" + "id" + "}", "$id").replace("{" + "name" + "}", "$name").replace("{" + "key" + "}", "$key"),
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return jsonRequest(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
         * PUT /api/v1/projects/{id}/run-configs/{config}/env/{env}/{key}
         * 
         * 
@@ -1620,15 +1763,15 @@ import io.ktor.http.ParametersBuilder
         * 
         * 
          * @param id The project&#39;s id 
+         * @param projectRunStart  (optional)
          * @return ProjectRun
         */
             @Suppress("UNCHECKED_CAST")
-        open suspend fun startProjectRun(id: kotlin.String): HttpResponse<ProjectRun> {
+        open suspend fun startProjectRun(id: kotlin.String, projectRunStart: ProjectRunStart?): HttpResponse<ProjectRun> {
 
             val localVariableAuthNames = listOf<String>("device_signature")
 
-            val localVariableBody = 
-                    io.ktor.client.utils.EmptyContent
+            val localVariableBody = projectRunStart
 
             val localVariableQuery = mutableMapOf<String, List<String>>()
 
@@ -1642,7 +1785,7 @@ import io.ktor.http.ParametersBuilder
             requiresAuthentication = true,
             )
 
-            return request(
+            return jsonRequest(
             localVariableConfig,
             localVariableBody,
             localVariableAuthNames

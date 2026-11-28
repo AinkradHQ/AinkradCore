@@ -187,13 +187,15 @@ async fn record(
 
 /// Inserts run `id` as `starting`, audited and emitted as `project.run_started`. 409 `conflict`
 /// when the project is archived or already has a live run.
+#[allow(clippy::too_many_arguments)]
 pub async fn begin(
     pool: &SqlitePool,
     id: &str,
     project_id: i64,
     spec_version: i64,
     runner: &str,
-    config: Option<(i64, &str)>,
+    config: Option<i64>,
+    environment: Option<&str>,
     who: Who<'_>,
 ) -> Result<Run, Error> {
     let mut tx = super::begin_write(pool).await?;
@@ -211,8 +213,8 @@ pub async fn begin(
     .bind(runner)
     .bind(who.by_device)
     .bind(who.now)
-    .bind(config.map(|c| c.0))
-    .bind(config.map(|c| c.1))
+    .bind(config)
+    .bind(environment)
     .execute(&mut *tx)
     .await;
     match inserted {
@@ -223,8 +225,8 @@ pub async fn begin(
         Err(e) => return Err(e.into()),
     }
     let details = json!({"run": id, "spec_version": spec_version, "runner": runner,
-                         "by_device": who.by_device, "config": config.map(|c| c.0),
-                         "environment": config.map(|c| c.1)});
+                         "by_device": who.by_device, "config": config,
+                         "environment": environment});
     record(
         &mut tx,
         who.actor,

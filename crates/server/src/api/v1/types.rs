@@ -416,7 +416,20 @@
 /// 111: a project's kind (2026-11-27). `kind` on `ProjectInfo`, `NewProject`, `NewGithubProject` and
 ///    `UpdateProject`: `web` (default, every existing project), `app`, `infra` or `other`; any other value is
 ///    400 `bad_kind`. An older Core ignores the field.
-pub const API_MINOR: u32 = 111;
+/// 112: runs by environment, permanent delete, why a slug is locked (2026-11-28). `POST /projects/{id}/run/start`
+///    takes an optional body `{environment}` (default the project's `default_environment`, else its first): the
+///    environment's project-level variables are laid over the spec's service, and the run records the environment.
+///    New `GET /projects/{id}/run-envs/{name}/env` (`listRunEnvVars`), `PUT`/`DELETE …/env/{key}`
+///    (`setRunEnvVar`, `deleteRunEnvVar`): those variables, shaped as a run configuration's (a plain value or a
+///    Secret link; values are never returned). `DELETE /projects/{id}` (`deleteProject`, admin and the app
+///    unlock): an archived project and everything tied to it, for good; 409 `project_running`, 409
+///    `not_archived`; audited and emitted as `project.deleted`. `slug_locked` on `ProjectInfo`: `running`,
+///    `has_secrets` or null. `room` (an existing Brain room id) on `NewProject` and `NewGithubProject`: checked
+///    before anything is made (400 without the Brain, 404 unknown, 409 `room_linked`), carried in the
+///    `project.created` event, and linked by the Brain instead of a room of its own. `POST /projects/from-github`
+///    takes 1-50 repos (was 10), read from GitHub eight at a time, and is all or nothing (the kind is set in the
+///    same step). An older Core ignores the body, the fields and the 50, and 404s the routes.
+pub const API_MINOR: u32 = 112;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

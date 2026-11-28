@@ -10,6 +10,7 @@
 use axum::Json;
 use axum::extract::{Extension, Query, State};
 use axum::http::StatusCode;
+use futures_util::{StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use utoipa::{IntoParams, ToSchema};
@@ -24,7 +25,9 @@ use crate::connections::material::Material;
 use crate::store::connections::{self as conns, bindings, secret};
 use crate::store::projects::{self as store, NewGithubRepo};
 
-const MAX_REPOS: usize = 10;
+/// Repos in one create, and how many of their GitHub reads run at once.
+const MAX_REPOS: usize = 50;
+const READS_AT_ONCE: usize = 8;
 
 pub(super) fn upstream(o: &Outcome) -> ApiError {
     let status = match o.code() {
@@ -201,7 +204,7 @@ pub async fn list(
 
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct NewGithubProject {
-    /// 1-10 repos as `owner/name`; the first is primary.
+    /// 1-50 repos as `owner/name`; the first is primary.
     pub repos: Vec<String>,
     /// Default: the first repo's name.
     pub name: Option<String>,
@@ -213,14 +216,48 @@ pub struct NewGithubProject {
     /// See `ProjectInfo.kind`; default `web`. 400 `bad_kind` for any other value (API 111).
     #[schema(required = false)]
     pub kind: Option<String>,
+    /// See `NewProject.kinds` (API 112).
+    #[schema(required = false)]
+    pub kinds: Option<Vec<String>>,
+    /// An existing Brain room to link instead of getting a new one (API 112); see `NewProject.room`.
+    #[schema(required = false)]
+    pub room: Option<String>,
+}
+
+/// GitHub's own name and default branch for `owner/name`; the connection must see it.
+async fn read_repo(app: &App, m: &Material, full: &str) -> Result<NewGithubRepo, ApiError> {
+    let built = build("github.get_repo", &json!({ "repo": full }))
+        .map_err(|e| ApiError::bad_request(e.to_string()))?;
+    let done = app
+        .connections
+        .github()
+        .execute(m, &built)
+        .await
+        .map_err(|o| upstream(&o))?;
+    let v: Value =
+        serde_json::from_slice(&done.body).map_err(|_| upstream(&Outcome::Unexpected))?;
+    let field = |x: &Value| x.as_str().filter(|s| !s.is_empty()).map(str::to_owned);
+    let (Some(owner), Some(name), Some(branch)) = (
+        field(&v["owner"]["login"]),
+        field(&v["name"]),
+        field(&v["default_branch"]),
+    ) else {
+        return Err(upstream(&Outcome::Unexpected));
+    };
+    Ok(NewGithubRepo {
+        remote_url: format!("https://github.com/{owner}/{name}.git"),
+        name,
+        default_branch: branch,
+    })
 }
 
 #[utoipa::path(post, path = "/api/v1/projects/from-github",
     operation_id = "createProjectFromGithub", tag = "projects", request_body = NewGithubProject,
     responses((status = 200, description = "Created with source `github` (audited and emitted as \
         `project.created`), its repos added with GitHub's names and default branches, and the \
-        connection bound to it (scope `project`, audited `connection.bound`). 400 for a bad repo, \
-        name or slug; 404 for a repo the connection cannot see; 409 `conflict` for a taken \
+        connection bound to it (scope `project`, audited `connection.bound`), all in one step: a repo \
+        that cannot be read leaves no project. 1-50 repos, read a few at a time. 400 for a bad repo, \
+        name or slug or more than 50 repos; 404 for a repo the connection cannot see; 409 `conflict` for a taken \
         explicit slug or a repeated repo, `no_connection` when none is set up", body = ProjectInfo)))]
 pub async fn create(
     State(app): State<App>,
@@ -234,41 +271,24 @@ pub async fn create(
     if let Some(n) = &b.name {
         store::name_ok(n)?;
     }
-    if let Some(k) = &b.kind {
-        store::kind_ok(k)?;
-    }
+    let kinds = store::kinds_of(b.kind.as_deref(), b.kinds.as_deref())?;
     if let Some(why) = b.slug.as_deref().and_then(store::slug_problem) {
         return Err(ApiError::bad_request(why));
     }
+    super::projects::check_room(&app, b.room.as_deref()).await?;
     let user = workspace(&app, &me).await?;
     let now = app.clock.now();
     let (c, m, _) = pick(&app, conn_who(&me, user, &now), b.connection_id, None).await?;
-    let mut repos = Vec::new();
+    // Every repo is read before anything is written, a few at a time: one that fails (the first in
+    // the caller's order) ends the create with nothing made.
+    let mut reads = Vec::new();
     for full in &b.repos {
-        let built = build("github.get_repo", &json!({ "repo": full }))
-            .map_err(|e| ApiError::bad_request(e.to_string()))?;
-        let done = app
-            .connections
-            .github()
-            .execute(&m, &built)
-            .await
-            .map_err(|o| upstream(&o))?;
-        let v: Value =
-            serde_json::from_slice(&done.body).map_err(|_| upstream(&Outcome::Unexpected))?;
-        let field = |x: &Value| x.as_str().filter(|s| !s.is_empty()).map(str::to_owned);
-        let (Some(owner), Some(name), Some(branch)) = (
-            field(&v["owner"]["login"]),
-            field(&v["name"]),
-            field(&v["default_branch"]),
-        ) else {
-            return Err(upstream(&Outcome::Unexpected));
-        };
-        repos.push(NewGithubRepo {
-            remote_url: format!("https://github.com/{owner}/{name}.git"),
-            name,
-            default_branch: branch,
-        });
+        reads.push(read_repo(&app, &m, full));
     }
+    let repos: Vec<NewGithubRepo> = futures_util::stream::iter(reads)
+        .buffered(READS_AT_ONCE)
+        .try_collect()
+        .await?;
     let name = b.name.clone().unwrap_or_else(|| repos[0].name.clone());
     // The workspace default needs no per-project binding.
     let is_default = bindings::list(&app.pool, user, Some("github"))
@@ -283,18 +303,9 @@ pub async fn create(
         &repos,
         who(&me, &now),
         bind,
+        (kinds.as_deref(), b.room.as_deref()),
     )
     .await?;
-    let p = match b.kind.as_deref() {
-        None => p,
-        kind => {
-            let c = store::Change {
-                kind,
-                ..store::Change::default()
-            };
-            store::change(&app.pool, p.id, &c, who(&me, &now)).await?
-        }
-    };
     let mut conn = app.pool.acquire().await?;
     let made = store::repos(&mut conn, p.id).await?;
     drop(conn);

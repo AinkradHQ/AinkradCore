@@ -497,7 +497,9 @@ pub fn router(app: App) -> Router {
         )
         .route(
             "/api/v1/projects/{id}",
-            get(projects::get).patch(projects::update),
+            get(projects::get)
+                .patch(projects::update)
+                .delete(projects::delete),
         )
         .route("/api/v1/projects/github/repos", get(projects_github::list))
         .route(
@@ -605,6 +607,14 @@ pub fn router(app: App) -> Router {
         .route(
             "/api/v1/projects/{id}/run-envs/{name}",
             delete(projects::run_configs::delete_env),
+        )
+        .route(
+            "/api/v1/projects/{id}/run-envs/{name}/env",
+            get(projects::run_env_vars::list),
+        )
+        .route(
+            "/api/v1/projects/{id}/run-envs/{name}/env/{key}",
+            put(projects::run_env_vars::set).delete(projects::run_env_vars::delete),
         )
         .route(
             "/api/v1/projects/{id}/run/activity",

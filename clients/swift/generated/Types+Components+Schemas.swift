@@ -7415,14 +7415,22 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/NewGithubProject/kind`.
             public var kind: Swift.String?
+            /// See `NewProject.kinds` (API 112).
+            ///
+            /// - Remark: Generated from `#/components/schemas/NewGithubProject/kinds`.
+            public var kinds: [Swift.String]?
             /// Default: the first repo's name.
             ///
             /// - Remark: Generated from `#/components/schemas/NewGithubProject/name`.
             public var name: Swift.String?
-            /// 1-10 repos as `owner/name`; the first is primary.
+            /// 1-50 repos as `owner/name`; the first is primary.
             ///
             /// - Remark: Generated from `#/components/schemas/NewGithubProject/repos`.
             public var repos: [Swift.String]
+            /// An existing Brain room to link instead of getting a new one (API 112); see `NewProject.room`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/NewGithubProject/room`.
+            public var room: Swift.String?
             /// Default: made from the name; a taken or reserved one gets `-2`, `-3`, ... An explicit slug
             /// that is taken is 409 `conflict`.
             ///
@@ -7433,27 +7441,35 @@ extension Components {
             /// - Parameters:
             ///   - connectionId: Default: the workspace's GitHub default.
             ///   - kind: See `ProjectInfo.kind`; default `web`. 400 `bad_kind` for any other value (API 111).
+            ///   - kinds: See `NewProject.kinds` (API 112).
             ///   - name: Default: the first repo's name.
-            ///   - repos: 1-10 repos as `owner/name`; the first is primary.
+            ///   - repos: 1-50 repos as `owner/name`; the first is primary.
+            ///   - room: An existing Brain room to link instead of getting a new one (API 112); see `NewProject.room`.
             ///   - slug: Default: made from the name; a taken or reserved one gets `-2`, `-3`, ... An explicit slug
             public init(
                 connectionId: Swift.Int64? = nil,
                 kind: Swift.String? = nil,
+                kinds: [Swift.String]? = nil,
                 name: Swift.String? = nil,
                 repos: [Swift.String],
+                room: Swift.String? = nil,
                 slug: Swift.String? = nil
             ) {
                 self.connectionId = connectionId
                 self.kind = kind
+                self.kinds = kinds
                 self.name = name
                 self.repos = repos
+                self.room = room
                 self.slug = slug
             }
             public enum CodingKeys: String, CodingKey {
                 case connectionId = "connection_id"
                 case kind
+                case kinds
                 case name
                 case repos
+                case room
                 case slug
             }
         }
@@ -7856,10 +7872,22 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/NewProject/kind`.
             public var kind: Swift.String?
+            /// Several kinds at once (API 112): at least one of `web`, `app`, `infra`, `other`, each once, `other`
+            /// only alone; `kind` becomes the first. 400 `bad_kind` otherwise. `kind` alone sets just it.
+            ///
+            /// - Remark: Generated from `#/components/schemas/NewProject/kinds`.
+            public var kinds: [Swift.String]?
             /// One line, 1-100 characters.
             ///
             /// - Remark: Generated from `#/components/schemas/NewProject/name`.
             public var name: Swift.String
+            /// An existing Brain room to link to the new project instead of getting a new one (API 112).
+            /// It must exist (404 `not_found`) and be linked to no project (409 `room_linked`); 400 when
+            /// the Brain is off. Checked before anything is created; the link is made by the Brain when
+            /// it reads the `project.created` event, so there is no window for it to make its own room.
+            ///
+            /// - Remark: Generated from `#/components/schemas/NewProject/room`.
+            public var room: Swift.String?
             /// `auto` (default), `this_mac` or `home_server`.
             ///
             /// - Remark: Generated from `#/components/schemas/NewProject/runner`.
@@ -7874,21 +7902,27 @@ extension Components {
             ///   - color: See `ProjectInfo.color` (API 110).
             ///   - description: Default empty.
             ///   - kind: See `ProjectInfo.kind`; default `web`. 400 `bad_kind` for any other value (API 111).
+            ///   - kinds: Several kinds at once (API 112): at least one of `web`, `app`, `infra`, `other`, each once, `other`
             ///   - name: One line, 1-100 characters.
+            ///   - room: An existing Brain room to link to the new project instead of getting a new one (API 112).
             ///   - runner: `auto` (default), `this_mac` or `home_server`.
             ///   - slug: See `ProjectInfo.slug`; it is the project's public host name.
             public init(
                 color: Swift.String? = nil,
                 description: Swift.String? = nil,
                 kind: Swift.String? = nil,
+                kinds: [Swift.String]? = nil,
                 name: Swift.String,
+                room: Swift.String? = nil,
                 runner: Swift.String? = nil,
                 slug: Swift.String
             ) {
                 self.color = color
                 self.description = description
                 self.kind = kind
+                self.kinds = kinds
                 self.name = name
+                self.room = room
                 self.runner = runner
                 self.slug = slug
             }
@@ -7896,7 +7930,9 @@ extension Components {
                 case color
                 case description
                 case kind
+                case kinds
                 case name
+                case room
                 case runner
                 case slug
             }
@@ -9104,6 +9140,21 @@ extension Components {
                 case memLimitMb = "mem_limit_mb"
             }
         }
+        /// - Remark: Generated from `#/components/schemas/ProjectDeleted`.
+        public struct ProjectDeleted: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/ProjectDeleted/deleted`.
+            public var deleted: Swift.Bool
+            /// Creates a new `ProjectDeleted`.
+            ///
+            /// - Parameters:
+            ///   - deleted:
+            public init(deleted: Swift.Bool) {
+                self.deleted = deleted
+            }
+            public enum CodingKeys: String, CodingKey {
+                case deleted
+            }
+        }
         /// - Remark: Generated from `#/components/schemas/ProjectInfo`.
         public struct ProjectInfo: Codable, Hashable, Sendable {
             /// The project's colour, one of the app's accents: `graphite`, `violet`, `blue`, `teal`,
@@ -9143,6 +9194,10 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/ProjectInfo/kind`.
             public var kind: Swift.String?
+            /// All of its kinds, the first being `kind` (API 112).
+            ///
+            /// - Remark: Generated from `#/components/schemas/ProjectInfo/kinds`.
+            public var kinds: [Swift.String]?
             /// - Remark: Generated from `#/components/schemas/ProjectInfo/mem_limit_mb`.
             public var memLimitMb: Swift.Int64
             /// - Remark: Generated from `#/components/schemas/ProjectInfo/name`.
@@ -9163,6 +9218,12 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/ProjectInfo/slug`.
             public var slug: Swift.String
+            /// Why `PATCH` would refuse a new `slug` now (API 112): `running` (a run is live) or
+            /// `has_secrets` (the project holds secrets, whose stored names carry the slug); null when the
+            /// slug can be changed.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ProjectInfo/slug_locked`.
+            public var slugLocked: Swift.String?
             /// `manual` or `github`.
             ///
             /// - Remark: Generated from `#/components/schemas/ProjectInfo/source`.
@@ -9187,12 +9248,14 @@ extension Components {
             ///   - idleMinutes:
             ///   - idleNever: The idle stop is off: the run keeps going while nobody visits.
             ///   - kind: What it is: `web` (default), `app` (desktop or mobile), `infra` (infrastructure, an OS) or
+            ///   - kinds: All of its kinds, the first being `kind` (API 112).
             ///   - memLimitMb:
             ///   - name:
             ///   - repos: The primary repo first, then by name.
             ///   - room: The linked Brain room; null when the Brain is off or the project has none.
             ///   - runner: Where it prefers to run: `auto`, `this_mac` or `home_server`.
             ///   - slug: A DNS label, 2-40 of `a-z0-9-`, starting with a letter; not a reserved name.
+            ///   - slugLocked: Why `PATCH` would refuse a new `slug` now (API 112): `running` (a run is live) or
             ///   - source: `manual` or `github`.
             ///   - state: `active` or `archived`.
             ///   - updatedAt:
@@ -9208,12 +9271,14 @@ extension Components {
                 idleMinutes: Swift.Int64,
                 idleNever: Swift.Bool? = nil,
                 kind: Swift.String? = nil,
+                kinds: [Swift.String]? = nil,
                 memLimitMb: Swift.Int64,
                 name: Swift.String,
                 repos: [Components.Schemas.ProjectRepo],
                 room: Components.Schemas.ProjectRoom? = nil,
                 runner: Swift.String? = nil,
                 slug: Swift.String,
+                slugLocked: Swift.String? = nil,
                 source: Swift.String,
                 state: Swift.String,
                 updatedAt: Components.Schemas.Timestamp
@@ -9229,12 +9294,14 @@ extension Components {
                 self.idleMinutes = idleMinutes
                 self.idleNever = idleNever
                 self.kind = kind
+                self.kinds = kinds
                 self.memLimitMb = memLimitMb
                 self.name = name
                 self.repos = repos
                 self.room = room
                 self.runner = runner
                 self.slug = slug
+                self.slugLocked = slugLocked
                 self.source = source
                 self.state = state
                 self.updatedAt = updatedAt
@@ -9251,12 +9318,14 @@ extension Components {
                 case idleMinutes = "idle_minutes"
                 case idleNever = "idle_never"
                 case kind
+                case kinds
                 case memLimitMb = "mem_limit_mb"
                 case name
                 case repos
                 case room
                 case runner
                 case slug
+                case slugLocked = "slug_locked"
                 case source
                 case state
                 case updatedAt = "updated_at"
@@ -9460,6 +9529,26 @@ extension Components {
                 case steps
                 case stopReason = "stop_reason"
                 case stoppedAt = "stopped_at"
+            }
+        }
+        /// An optional body for `run/start`.
+        ///
+        /// - Remark: Generated from `#/components/schemas/ProjectRunStart`.
+        public struct ProjectRunStart: Codable, Hashable, Sendable {
+            /// The run environment (API 112): its project-level variables (`…/run-envs/{name}/env`) are
+            /// laid over the spec's service. Default the project's `default_environment`, else its first.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ProjectRunStart/environment`.
+            public var environment: Swift.String?
+            /// Creates a new `ProjectRunStart`.
+            ///
+            /// - Parameters:
+            ///   - environment: The run environment (API 112): its project-level variables (`…/run-envs/{name}/env`) are
+            public init(environment: Swift.String? = nil) {
+                self.environment = environment
+            }
+            public enum CodingKeys: String, CodingKey {
+                case environment
             }
         }
         /// What a delete answers.
@@ -14173,6 +14262,11 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/UpdateProject/kind`.
             public var kind: Swift.String?
+            /// Several kinds at once (API 112): at least one of `web`, `app`, `infra`, `other`, each once, `other`
+            /// only alone; `kind` becomes the first. 400 `bad_kind` otherwise. `kind` alone sets just it.
+            ///
+            /// - Remark: Generated from `#/components/schemas/UpdateProject/kinds`.
+            public var kinds: [Swift.String]?
             /// Memory a run may use, 64 to 32768 MB.
             ///
             /// - Remark: Generated from `#/components/schemas/UpdateProject/mem_limit_mb`.
@@ -14199,6 +14293,7 @@ extension Components {
             ///   - idleMinutes: Idle stop, 5 to 1440 minutes.
             ///   - idleNever: Turn the idle stop off (true) or back on (false).
             ///   - kind: See `ProjectInfo.kind`; 400 `bad_kind` for any other value (API 111).
+            ///   - kinds: Several kinds at once (API 112): at least one of `web`, `app`, `infra`, `other`, each once, `other`
             ///   - memLimitMb: Memory a run may use, 64 to 32768 MB.
             ///   - name:
             ///   - runner: Where it prefers to run: `auto`, `this_mac` or `home_server`.
@@ -14213,6 +14308,7 @@ extension Components {
                 idleMinutes: Swift.Int64? = nil,
                 idleNever: Swift.Bool? = nil,
                 kind: Swift.String? = nil,
+                kinds: [Swift.String]? = nil,
                 memLimitMb: Swift.Int64? = nil,
                 name: Swift.String? = nil,
                 runner: Swift.String? = nil,
@@ -14227,6 +14323,7 @@ extension Components {
                 self.idleMinutes = idleMinutes
                 self.idleNever = idleNever
                 self.kind = kind
+                self.kinds = kinds
                 self.memLimitMb = memLimitMb
                 self.name = name
                 self.runner = runner
@@ -14242,6 +14339,7 @@ extension Components {
                 case idleMinutes = "idle_minutes"
                 case idleNever = "idle_never"
                 case kind
+                case kinds
                 case memLimitMb = "mem_limit_mb"
                 case name
                 case runner

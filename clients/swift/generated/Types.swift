@@ -457,6 +457,9 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `PATCH /api/v1/projects/{id}`.
     /// - Remark: Generated from `#/paths//api/v1/projects/{id}/patch(updateProject)`.
     func updateProject(_ input: Operations.UpdateProject.Input) async throws -> Operations.UpdateProject.Output
+    /// - Remark: HTTP `DELETE /api/v1/projects/{id}`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/{id}/delete(deleteProject)`.
+    func deleteProject(_ input: Operations.DeleteProject.Input) async throws -> Operations.DeleteProject.Output
     /// - Remark: HTTP `GET /api/v1/projects/{id}/approval-rules`.
     /// - Remark: Generated from `#/paths//api/v1/projects/{id}/approval-rules/get(listApprovalRules)`.
     func listApprovalRules(_ input: Operations.ListApprovalRules.Input) async throws -> Operations.ListApprovalRules.Output
@@ -541,6 +544,15 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `DELETE /api/v1/projects/{id}/run-envs/{name}`.
     /// - Remark: Generated from `#/paths//api/v1/projects/{id}/run-envs/{name}/delete(deleteRunEnv)`.
     func deleteRunEnv(_ input: Operations.DeleteRunEnv.Input) async throws -> Operations.DeleteRunEnv.Output
+    /// - Remark: HTTP `GET /api/v1/projects/{id}/run-envs/{name}/env`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/{id}/run-envs/{name}/env/get(listRunEnvVars)`.
+    func listRunEnvVars(_ input: Operations.ListRunEnvVars.Input) async throws -> Operations.ListRunEnvVars.Output
+    /// - Remark: HTTP `PUT /api/v1/projects/{id}/run-envs/{name}/env/{key}`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/{id}/run-envs/{name}/env/{key}/put(setRunEnvVar)`.
+    func setRunEnvVar(_ input: Operations.SetRunEnvVar.Input) async throws -> Operations.SetRunEnvVar.Output
+    /// - Remark: HTTP `DELETE /api/v1/projects/{id}/run-envs/{name}/env/{key}`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/{id}/run-envs/{name}/env/{key}/delete(deleteRunEnvVar)`.
+    func deleteRunEnvVar(_ input: Operations.DeleteRunEnvVar.Input) async throws -> Operations.DeleteRunEnvVar.Output
     /// - Remark: HTTP `POST /api/v1/projects/{id}/run/activity`.
     /// - Remark: Generated from `#/paths//api/v1/projects/{id}/run/activity/post(touchProjectRun)`.
     func touchProjectRun(_ input: Operations.TouchProjectRun.Input) async throws -> Operations.TouchProjectRun.Output
@@ -2345,6 +2357,17 @@ extension APIProtocol {
             body: body
         ))
     }
+    /// - Remark: HTTP `DELETE /api/v1/projects/{id}`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/{id}/delete(deleteProject)`.
+    public func deleteProject(
+        path: Operations.DeleteProject.Input.Path,
+        headers: Operations.DeleteProject.Input.Headers = .init()
+    ) async throws -> Operations.DeleteProject.Output {
+        try await deleteProject(Operations.DeleteProject.Input(
+            path: path,
+            headers: headers
+        ))
+    }
     /// - Remark: HTTP `GET /api/v1/projects/{id}/approval-rules`.
     /// - Remark: Generated from `#/paths//api/v1/projects/{id}/approval-rules/get(listApprovalRules)`.
     public func listApprovalRules(
@@ -2671,6 +2694,41 @@ extension APIProtocol {
             headers: headers
         ))
     }
+    /// - Remark: HTTP `GET /api/v1/projects/{id}/run-envs/{name}/env`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/{id}/run-envs/{name}/env/get(listRunEnvVars)`.
+    public func listRunEnvVars(
+        path: Operations.ListRunEnvVars.Input.Path,
+        headers: Operations.ListRunEnvVars.Input.Headers = .init()
+    ) async throws -> Operations.ListRunEnvVars.Output {
+        try await listRunEnvVars(Operations.ListRunEnvVars.Input(
+            path: path,
+            headers: headers
+        ))
+    }
+    /// - Remark: HTTP `PUT /api/v1/projects/{id}/run-envs/{name}/env/{key}`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/{id}/run-envs/{name}/env/{key}/put(setRunEnvVar)`.
+    public func setRunEnvVar(
+        path: Operations.SetRunEnvVar.Input.Path,
+        headers: Operations.SetRunEnvVar.Input.Headers = .init(),
+        body: Operations.SetRunEnvVar.Input.Body
+    ) async throws -> Operations.SetRunEnvVar.Output {
+        try await setRunEnvVar(Operations.SetRunEnvVar.Input(
+            path: path,
+            headers: headers,
+            body: body
+        ))
+    }
+    /// - Remark: HTTP `DELETE /api/v1/projects/{id}/run-envs/{name}/env/{key}`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/{id}/run-envs/{name}/env/{key}/delete(deleteRunEnvVar)`.
+    public func deleteRunEnvVar(
+        path: Operations.DeleteRunEnvVar.Input.Path,
+        headers: Operations.DeleteRunEnvVar.Input.Headers = .init()
+    ) async throws -> Operations.DeleteRunEnvVar.Output {
+        try await deleteRunEnvVar(Operations.DeleteRunEnvVar.Input(
+            path: path,
+            headers: headers
+        ))
+    }
     /// - Remark: HTTP `POST /api/v1/projects/{id}/run/activity`.
     /// - Remark: Generated from `#/paths//api/v1/projects/{id}/run/activity/post(touchProjectRun)`.
     public func touchProjectRun(
@@ -2762,11 +2820,13 @@ extension APIProtocol {
     /// - Remark: Generated from `#/paths//api/v1/projects/{id}/run/start/post(startProjectRun)`.
     public func startProjectRun(
         path: Operations.StartProjectRun.Input.Path,
-        headers: Operations.StartProjectRun.Input.Headers = .init()
+        headers: Operations.StartProjectRun.Input.Headers = .init(),
+        body: Operations.StartProjectRun.Input.Body? = nil
     ) async throws -> Operations.StartProjectRun.Output {
         try await startProjectRun(Operations.StartProjectRun.Input(
             path: path,
-            headers: headers
+            headers: headers,
+            body: body
         ))
     }
     /// - Remark: HTTP `POST /api/v1/projects/{id}/run/stop`.

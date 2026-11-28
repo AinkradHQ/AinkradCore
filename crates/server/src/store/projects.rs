@@ -66,8 +66,10 @@ pub struct Project {
     pub default_environment: Option<String>,
     /// One of [`COLORS`], when picked.
     pub color: Option<String>,
-    /// One of [`KINDS`].
+    /// One of [`KINDS`]: the first of `kinds`.
     pub kind: String,
+    /// One or more of [`KINDS`], in order (API 112).
+    pub kinds: Vec<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -103,6 +105,32 @@ fn refused<T>(code: &'static str, message: &str) -> Result<T, Error> {
     })
 }
 
+/// The kinds to store from what a caller sent (API 112): `kinds` when given (at least one, each
+/// one of [`KINDS`], no repeats, `other` only alone; a `kind` sent with it must be the first),
+/// else `[kind]`, else `None` (leave them). `bad_kind` otherwise.
+pub fn kinds_of(
+    kind: Option<&str>,
+    kinds: Option<&[String]>,
+) -> Result<Option<Vec<String>>, Error> {
+    let Some(ks) = kinds else {
+        return kind
+            .map(|k| kind_ok(k).map(|()| vec![k.to_owned()]))
+            .transpose();
+    };
+    ks.iter().try_for_each(|k| kind_ok(k))?;
+    let mut seen = std::collections::HashSet::new();
+    if ks.is_empty() || !ks.iter().all(|k| seen.insert(k)) {
+        return refused("bad_kind", "name at least one kind, each once");
+    }
+    if ks.len() > 1 && ks.iter().any(|k| k == "other") {
+        return refused("bad_kind", "other stands alone");
+    }
+    if kind.is_some_and(|k| k != ks[0]) {
+        return refused("bad_kind", "kind is the first of kinds");
+    }
+    Ok(Some(ks.to_vec()))
+}
+
 /// `bad_kind` unless `kind` is one of [`KINDS`].
 pub fn kind_ok(kind: &str) -> Result<(), Error> {
     match KINDS.contains(&kind) {
@@ -130,7 +158,7 @@ pub fn slug_problem(slug: &str) -> Option<&'static str> {
 
 const SELECT: &str = "SELECT id, slug, name, description, state, source, secret_group, expose, \
     idle_minutes, idle_never, cpu_limit, mem_limit_mb, runner_pref, fetch_interval_minutes, \
-    default_environment, color, kind, created_at, updated_at FROM core_projects";
+    default_environment, color, kind, kinds, created_at, updated_at FROM core_projects";
 
 fn project(r: SqliteRow) -> Result<Project, sqlx::Error> {
     Ok(Project {
@@ -151,6 +179,11 @@ fn project(r: SqliteRow) -> Result<Project, sqlx::Error> {
         default_environment: r.try_get("default_environment")?,
         color: r.try_get("color")?,
         kind: r.try_get("kind")?,
+        kinds: r
+            .try_get::<String, _>("kinds")?
+            .split(',')
+            .map(str::to_owned)
+            .collect(),
         created_at: r.try_get("created_at")?,
         updated_at: r.try_get("updated_at")?,
     })
@@ -272,6 +305,20 @@ pub async fn create(
     source: &str,
     who: Who<'_>,
 ) -> Result<Project, Error> {
+    create_with_room(pool, slug, name, description, source, None, who).await
+}
+
+/// [`create`] for a project whose Brain room is chosen: the id goes in the `project.created`
+/// event, and the Brain links that room instead of making one (API 112).
+pub async fn create_with_room(
+    pool: &SqlitePool,
+    slug: &str,
+    name: &str,
+    description: &str,
+    source: &str,
+    room: Option<&str>,
+    who: Who<'_>,
+) -> Result<Project, Error> {
     if let Some(why) = slug_problem(slug) {
         return refused("bad_request", why);
     }
@@ -280,7 +327,7 @@ pub async fn create(
         return refused("bad_request", "a source is manual or github");
     }
     let mut tx = super::begin_write(pool).await?;
-    let p = create_in(&mut tx, slug, name, description, source, who).await?;
+    let p = create_in(&mut tx, slug, name, description, (source, room), who).await?;
     tx.commit().await?;
     Ok(p)
 }
@@ -291,7 +338,7 @@ async fn create_in(
     slug: &str,
     name: &str,
     description: &str,
-    source: &str,
+    (source, room): (&str, Option<&str>),
     who: Who<'_>,
 ) -> Result<Project, Error> {
     let taken: i64 = sqlx::query_scalar("SELECT count(*) FROM core_projects WHERE slug = ?")
@@ -319,7 +366,11 @@ async fn create_in(
     .bind(d.idle_never)
     .fetch_one(&mut *tx)
     .await?;
-    let details = json!({"slug": slug, "name": name, "source": source, "by_device": who.by_device});
+    let mut details =
+        json!({"slug": slug, "name": name, "source": source, "by_device": who.by_device});
+    if let Some(room) = room {
+        details["room"] = json!(room);
+    }
     record(tx, who.actor, "project.created", id, details, true).await?;
     let p = get(tx, id).await?;
     super::project_secrets::ensure_group(tx, &p, who).await?;
@@ -345,8 +396,10 @@ pub struct Change<'a> {
     pub default_environment: Option<&'a str>,
     /// One of [`COLORS`]; an empty string clears it.
     pub color: Option<&'a str>,
-    /// One of [`KINDS`].
+    /// One of [`KINDS`]; sets `kinds` to just it.
     pub kind: Option<&'a str>,
+    /// Several of [`KINDS`] ([`kinds_of`]); `kind` becomes the first.
+    pub kinds: Option<&'a [String]>,
 }
 
 /// Changes name, description and/or public exposure (`None` keeps it). An archived project is
@@ -443,8 +496,8 @@ pub async fn change(
         }
         None => old.color.clone(),
     };
-    let kind = c.kind.unwrap_or(&old.kind);
-    kind_ok(kind)?;
+    let kinds = kinds_of(c.kind, c.kinds)?.unwrap_or_else(|| old.kinds.clone());
+    let kind = kinds[0].as_str();
     let never = c.idle_never.unwrap_or(old.idle_never);
     limits_ok(idle, cpu, mem)?;
     let slug = c.slug.unwrap_or(&old.slug);
@@ -473,7 +526,7 @@ pub async fn change(
     sqlx::query(
         "UPDATE core_projects SET slug = ?, name = ?, description = ?, expose = ?, \
          idle_minutes = ?, idle_never = ?, cpu_limit = ?, mem_limit_mb = ?, runner_pref = ?, \
-         fetch_interval_minutes = ?, default_environment = ?, color = ?, kind = ?, updated_at = ? WHERE id = ?",
+         fetch_interval_minutes = ?, default_environment = ?, color = ?, kind = ?, kinds = ?, updated_at = ? WHERE id = ?",
     )
     .bind(slug)
     .bind(name)
@@ -488,13 +541,14 @@ pub async fn change(
     .bind(&env)
     .bind(&color)
     .bind(kind)
+    .bind(kinds.join(","))
     .bind(who.now)
     .bind(id)
     .execute(&mut *tx)
     .await?;
     let details = json!({"name": name, "slug": slug, "expose": expose, "idle_minutes": idle,
         "idle_never": never, "cpu_limit": cpu, "mem_limit_mb": mem, "runner": runner,
-        "fetch_interval_minutes": fetch, "default_environment": env, "color": color, "kind": kind, "by_device": who.by_device});
+        "fetch_interval_minutes": fetch, "default_environment": env, "color": color, "kind": kind, "kinds": kinds, "by_device": who.by_device});
     record(&mut tx, who.actor, "project.updated", id, details, true).await?;
     let p = get(&mut tx, id).await?;
     tx.commit().await?;
@@ -557,13 +611,15 @@ pub async fn unarchive(pool: &SqlitePool, id: i64, who: Who<'_>) -> Result<Proje
 }
 
 mod defaults;
+mod delete;
 mod github;
 mod repos;
 pub use defaults::{Defaults, DefaultsChange, get as defaults, set as set_defaults};
+pub use delete::delete;
 pub use github::{NewGithubRepo, create_from_github};
 use repos::add_repo_in;
 pub use repos::{
-    add_repo, mirror, remove_repo, set_branch, set_mirror, set_mirror_state, set_primary,
+    add_repo, mirror, mirror_in, remove_repo, set_branch, set_mirror, set_mirror_state, set_primary,
 };
 
 #[cfg(test)]

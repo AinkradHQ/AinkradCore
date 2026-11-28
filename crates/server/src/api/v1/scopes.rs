@@ -228,6 +228,7 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("POST", "/api/v1/projects/from-github", "admin"),
     ("GET", "/api/v1/projects/{id}", "read"),
     ("PATCH", "/api/v1/projects/{id}", "admin"),
+    ("DELETE", "/api/v1/projects/{id}", "admin"),
     ("POST", "/api/v1/projects/{id}/archive", "admin"),
     ("POST", "/api/v1/projects/{id}/unarchive", "admin"),
     ("GET", "/api/v1/projects/defaults", "read"),
@@ -334,6 +335,17 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("GET", "/api/v1/projects/{id}/run-envs", "read"),
     ("POST", "/api/v1/projects/{id}/run-envs", "admin"),
     ("DELETE", "/api/v1/projects/{id}/run-envs/{name}", "admin"),
+    ("GET", "/api/v1/projects/{id}/run-envs/{name}/env", "read"),
+    (
+        "PUT",
+        "/api/v1/projects/{id}/run-envs/{name}/env/{key}",
+        "admin",
+    ),
+    (
+        "DELETE",
+        "/api/v1/projects/{id}/run-envs/{name}/env/{key}",
+        "admin",
+    ),
     ("GET", "/api/v1/projects/{id}/run/services", "read"),
     // Logs are what the project's code printed (redacted, but still its own words): admin.
     ("GET", "/api/v1/projects/{id}/run/logs", "admin"),
@@ -487,6 +499,9 @@ pub const UNLOCKED: &[(&str, &str)] = &[
     // A run configuration starts a container on a runner, as the project run does (E11-3).
     ("POST", "/api/v1/projects/{id}/run-configs/{config}/run"),
     ("POST", "/api/v1/projects/{id}/runs/{run}/stop"),
+    // A project and everything tied to it, for good (API 112): a deletion like any other, behind the
+    // app unlock; it must be archived first and have no live run.
+    ("DELETE", "/api/v1/projects/{id}"),
     // A heavy job runs code on a runner, as a terminal does (E15-3).
     ("POST", "/api/v1/jobs"),
     ("POST", "/api/v1/jobs/{id}/signal"),

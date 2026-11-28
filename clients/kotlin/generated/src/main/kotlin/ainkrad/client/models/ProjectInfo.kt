@@ -43,8 +43,10 @@ import kotlinx.serialization.Contextual
  * @param fetchIntervalMinutes Minutes between automatic fetches: 10, 15, 60, or 0 for only when asked.
  * @param idleNever The idle stop is off: the run keeps going while nobody visits.
  * @param kind What it is: `web` (default), `app` (desktop or mobile), `infra` (infrastructure, an OS) or `other` (not software) (API 111).
+ * @param kinds All of its kinds, the first being `kind` (API 112).
  * @param room The linked Brain room; null when the Brain is off or the project has none.
  * @param runner Where it prefers to run: `auto`, `this_mac` or `home_server`.
+ * @param slugLocked Why `PATCH` would refuse a new `slug` now (API 112): `running` (a run is live) or `has_secrets` (the project holds secrets, whose stored names carry the slug); null when the slug can be changed.
  */
 @Serializable
 
@@ -116,13 +118,21 @@ data class ProjectInfo (
     @SerialName(value = "kind")
     val kind: kotlin.String? = null,
 
+    /* All of its kinds, the first being `kind` (API 112). */
+    @SerialName(value = "kinds")
+    val kinds: kotlin.collections.List<kotlin.String>? = null,
+
     /* The linked Brain room; null when the Brain is off or the project has none. */
     @SerialName(value = "room")
     val room: ProjectRoom? = null,
 
     /* Where it prefers to run: `auto`, `this_mac` or `home_server`. */
     @SerialName(value = "runner")
-    val runner: kotlin.String? = null
+    val runner: kotlin.String? = null,
+
+    /* Why `PATCH` would refuse a new `slug` now (API 112): `running` (a run is live) or `has_secrets` (the project holds secrets, whose stored names carry the slug); null when the slug can be changed. */
+    @SerialName(value = "slug_locked")
+    val slugLocked: kotlin.String? = null
 
 ) {
 

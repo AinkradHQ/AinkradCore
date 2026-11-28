@@ -28,6 +28,8 @@ import kotlinx.serialization.Contextual
  * @param color See `ProjectInfo.color` (API 110).
  * @param description Default empty.
  * @param kind See `ProjectInfo.kind`; default `web`. 400 `bad_kind` for any other value (API 111).
+ * @param kinds Several kinds at once (API 112): at least one of `web`, `app`, `infra`, `other`, each once, `other` only alone; `kind` becomes the first. 400 `bad_kind` otherwise. `kind` alone sets just it.
+ * @param room An existing Brain room to link to the new project instead of getting a new one (API 112). It must exist (404 `not_found`) and be linked to no project (409 `room_linked`); 400 when the Brain is off. Checked before anything is created; the link is made by the Brain when it reads the `project.created` event, so there is no window for it to make its own room.
  * @param runner `auto` (default), `this_mac` or `home_server`.
  */
 @Serializable
@@ -53,6 +55,14 @@ data class NewProject (
     /* See `ProjectInfo.kind`; default `web`. 400 `bad_kind` for any other value (API 111). */
     @SerialName(value = "kind")
     val kind: kotlin.String? = null,
+
+    /* Several kinds at once (API 112): at least one of `web`, `app`, `infra`, `other`, each once, `other` only alone; `kind` becomes the first. 400 `bad_kind` otherwise. `kind` alone sets just it. */
+    @SerialName(value = "kinds")
+    val kinds: kotlin.collections.List<kotlin.String>? = null,
+
+    /* An existing Brain room to link to the new project instead of getting a new one (API 112). It must exist (404 `not_found`) and be linked to no project (409 `room_linked`); 400 when the Brain is off. Checked before anything is created; the link is made by the Brain when it reads the `project.created` event, so there is no window for it to make its own room. */
+    @SerialName(value = "room")
+    val room: kotlin.String? = null,
 
     /* `auto` (default), `this_mac` or `home_server`. */
     @SerialName(value = "runner")

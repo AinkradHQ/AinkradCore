@@ -615,6 +615,16 @@ fn every_privileged_write_is_danger_unlocked_or_plain_with_a_reason() {
             "/api/v1/projects/{id}/run-envs/{name}",
             "E11: a configuration is data until a run starts, and starting one needs the app unlock",
         ),
+        (
+            "PUT",
+            "/api/v1/projects/{id}/run-envs/{name}/env/{key}",
+            "API 112: an environment's variables are data until a run starts, and starting one needs the app unlock",
+        ),
+        (
+            "DELETE",
+            "/api/v1/projects/{id}/run-envs/{name}/env/{key}",
+            "API 112: an environment's variables are data until a run starts, and starting one needs the app unlock",
+        ),
     ];
     let in_plain = |m: &str, t: &str| PLAIN.iter().any(|(pm, pt, _)| *pm == m && *pt == t);
     for (m, t, scope) in ROUTES {

@@ -70,6 +70,7 @@ pub mod overview_select;
 pub mod overview_write;
 mod places;
 mod policy;
+mod project_deleted;
 mod project_rooms;
 pub mod propose;
 mod redistil;

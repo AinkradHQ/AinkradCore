@@ -83,6 +83,7 @@
     "notify.delivery",
     "project.archived",
     "project.created",
+    "project.deleted",
     "project.mirror_changed",
     "project.run_gave_up",
     "project.run_started",
